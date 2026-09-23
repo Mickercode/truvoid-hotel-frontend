@@ -20,22 +20,33 @@ BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── Postgres migrations (`dotnet TruvoID.API.dll migrate`) ─────────────────
-// Run as a separate deploy step with the DDL-owning migrator role, so the
-// running API only ever holds the DML-only app role's credentials.
-if (args.FirstOrDefault() == "migrate")
+// ── Postgres admin commands ────────────────────────────────────────────────
+// `dotnet TruvoID.API.dll migrate`           control plane + every tenant schema
+// `dotnet TruvoID.API.dll provision-tenants` create schema + role for pending Organizations
+// Both run with the DDL-owning migrator role as separate steps, so the running
+// API only ever holds DML-only credentials.
+if (args.FirstOrDefault() is "migrate" or "provision-tenants")
 {
     var migratorConnectionString = builder.Configuration.GetConnectionString("PostgresMigrator")
         ?? throw new InvalidOperationException("ConnectionStrings:PostgresMigrator is not set.");
-    var appRole = builder.Configuration["Postgres:AppRole"] ?? "truvo_app";
-
     using var loggerFactory = LoggerFactory.Create(logging => logging.AddConsole());
-    var applied = await PostgresMigrator.MigrateAsync(
-        migratorConnectionString,
-        appRole,
-        PostgresMigrator.LoadEmbeddedControlPlaneScripts(),
-        loggerFactory.CreateLogger("PostgresMigrator"));
-    Console.WriteLine($"Postgres control plane up to date ({applied} migration(s) applied).");
+    var logger = loggerFactory.CreateLogger("Postgres");
+
+    if (args[0] == "migrate")
+    {
+        var appRole = builder.Configuration["Postgres:AppRole"] ?? "truvo_app";
+        var controlApplied = await PostgresMigrator.MigrateAsync(
+            migratorConnectionString, appRole, PostgresMigrator.LoadEmbeddedControlPlaneScripts(), logger);
+        var tenantApplied = await PostgresMigrator.MigrateTenantsAsync(
+            migratorConnectionString, PostgresMigrator.LoadEmbeddedTenantScripts(), logger);
+        Console.WriteLine($"Postgres up to date ({controlApplied} control-plane, {tenantApplied} tenant migration(s) applied).");
+    }
+    else
+    {
+        var provisioner = new TenantProvisioner(migratorConnectionString, CreateTenantCredentialProtector(builder.Configuration), logger);
+        var provisioned = await provisioner.ProvisionPendingAsync();
+        Console.WriteLine($"Provisioned {provisioned} Organization(s).");
+    }
     return;
 }
 
@@ -171,6 +182,13 @@ app.UseAuthorization();
 app.MapTruvoIdEndpoints();
 
 app.Run();
+
+// Postgres:TenantCredentialKey is a base64 32-byte key (openssl rand -base64 32).
+static TenantCredentialProtector CreateTenantCredentialProtector(IConfiguration configuration) =>
+    TenantCredentialProtector.FromBase64(
+        configuration["Postgres:TenantCredentialKeyId"] ?? "k1",
+        configuration["Postgres:TenantCredentialKey"]
+            ?? throw new InvalidOperationException("Postgres:TenantCredentialKey is not set."));
 
 // ── Dev-only no-op mailer ─────────────────────────────────────────────────
 public class DevNullEmailService : IEmailService

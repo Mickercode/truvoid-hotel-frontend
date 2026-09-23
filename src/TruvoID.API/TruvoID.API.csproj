@@ -31,8 +31,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Postgres control-plane migrations, applied by `dotnet TruvoID.API.dll migrate` -->
+    <!-- Postgres migrations, applied by `dotnet TruvoID.API.dll migrate` / `provision-tenants` -->
     <EmbeddedResource Include="TruvoID.Infrastructure/Postgres/Migrations/ControlPlane/*.sql" LogicalName="ControlPlane.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="TruvoID.Infrastructure/Postgres/Migrations/Tenant/*.sql" LogicalName="Tenant.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
