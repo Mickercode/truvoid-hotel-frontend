@@ -13,6 +13,8 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="MongoDB.Driver" Version="3.11.1" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.15.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
@@ -28,6 +30,10 @@
     <Compile Include="..\..\src\TruvoID.API\TruvoID.Domain\Entities\NotificationEvent.cs" Link="Entities\NotificationEvent.cs" />
     <Compile Include="..\..\src\TruvoID.API\TruvoID.Domain\Entities\InstitutionPricing.cs" Link="Entities\InstitutionPricing.cs" />
     <Compile Include="..\..\src\TruvoID.API\TruvoID.Domain\Enums\VerificationType.cs" Link="Enums\VerificationType.cs" />
+    <Compile Include="..\..\src\TruvoID.API\TruvoID.Infrastructure\Postgres\PostgresMigrator.cs" Link="Postgres\PostgresMigrator.cs" />
+    <EmbeddedResource Include="..\..\src\TruvoID.API\TruvoID.Infrastructure\Postgres\Migrations\ControlPlane\*.sql" LogicalName="ControlPlane.%(Filename)%(Extension)" />
+    <!-- The real local role bootstrap, so the tests exercise the same role setup devs run -->
+    <EmbeddedResource Include="..\..\deploy\local\postgres-init\01-roles.sql" LogicalName="LocalInit.01-roles.sql" />
   </ItemGroup>
 
 </Project>

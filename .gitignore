@@ -23,3 +23,6 @@ appsettings.*.json
 
 # Dev scripts
 tmp/
+
+# Local reference clone of the Slogani PHP prototype (not part of the build)
+slogani/

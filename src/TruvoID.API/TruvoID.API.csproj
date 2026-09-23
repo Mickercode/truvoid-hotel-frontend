@@ -31,8 +31,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Postgres control-plane migrations, applied by `dotnet TruvoID.API.dll migrate` -->
+    <EmbeddedResource Include="TruvoID.Infrastructure/Postgres/Migrations/ControlPlane/*.sql" LogicalName="ControlPlane.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.*" />
     <PackageReference Include="MongoDB.Driver" Version="3.11.1" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
   </ItemGroup>
 
 </Project>

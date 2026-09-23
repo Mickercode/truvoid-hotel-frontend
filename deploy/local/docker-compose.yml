@@ -1,0 +1,19 @@
+# Local Postgres for the multitenant build. Dev-only credentials.
+#   docker compose -f deploy/local/docker-compose.yml up -d
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_dev
+      POSTGRES_DB: truvoid
+    ports:
+      # 5433 on the host so it doesn't collide with a locally installed Postgres
+      - "5433:5432"
+    volumes:
+      - truvoid-postgres:/var/lib/postgresql/data
+      # Runs once, on first start with an empty volume
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+
+volumes:
+  truvoid-postgres:

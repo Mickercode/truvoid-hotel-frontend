@@ -10,6 +10,7 @@ using System.Text;
 using TruvoID.API.Endpoints;
 using TruvoID.Core.Interfaces;
 using TruvoID.Infrastructure.Data;
+using TruvoID.Infrastructure.Postgres;
 using TruvoID.Infrastructure.Services;
 
 // MongoDB.Driver 3.x no longer assumes a Guid representation — every entity here
@@ -18,6 +19,25 @@ using TruvoID.Infrastructure.Services;
 BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ── Postgres migrations (`dotnet TruvoID.API.dll migrate`) ─────────────────
+// Run as a separate deploy step with the DDL-owning migrator role, so the
+// running API only ever holds the DML-only app role's credentials.
+if (args.FirstOrDefault() == "migrate")
+{
+    var migratorConnectionString = builder.Configuration.GetConnectionString("PostgresMigrator")
+        ?? throw new InvalidOperationException("ConnectionStrings:PostgresMigrator is not set.");
+    var appRole = builder.Configuration["Postgres:AppRole"] ?? "truvo_app";
+
+    using var loggerFactory = LoggerFactory.Create(logging => logging.AddConsole());
+    var applied = await PostgresMigrator.MigrateAsync(
+        migratorConnectionString,
+        appRole,
+        PostgresMigrator.LoadEmbeddedControlPlaneScripts(),
+        loggerFactory.CreateLogger("PostgresMigrator"));
+    Console.WriteLine($"Postgres control plane up to date ({applied} migration(s) applied).");
+    return;
+}
 
 // ── Port / hosting ─────────────────────────────────────────────────────────
 var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
