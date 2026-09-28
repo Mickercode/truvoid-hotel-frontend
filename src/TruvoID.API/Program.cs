@@ -2,21 +2,11 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using TruvoID.API.Auth;
-using MongoDB.Bson;
-using MongoDB.Bson.Serialization;
-using MongoDB.Bson.Serialization.Serializers;
-using MongoDB.Driver;
+using Npgsql;
 using System.Text;
 using TruvoID.API.Endpoints;
 using TruvoID.Core.Interfaces;
-using TruvoID.Infrastructure.Data;
 using TruvoID.Infrastructure.Postgres;
-using TruvoID.Infrastructure.Services;
-
-// MongoDB.Driver 3.x no longer assumes a Guid representation — every entity here
-// uses a Guid Id, so without this any insert/update touching a Guid field throws
-// "Cannot serialize a Guid without knowing its representation" at the first write.
-BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,7 +15,7 @@ var builder = WebApplication.CreateBuilder(args);
 // `dotnet TruvoID.API.dll provision-tenants` create schema + role for pending Organizations
 // Both run with the DDL-owning migrator role as separate steps, so the running
 // API only ever holds DML-only credentials.
-if (args.FirstOrDefault() is "migrate" or "provision-tenants")
+if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue")
 {
     var migratorConnectionString = builder.Configuration.GetConnectionString("PostgresMigrator")
         ?? throw new InvalidOperationException("ConnectionStrings:PostgresMigrator is not set.");
@@ -41,11 +31,16 @@ if (args.FirstOrDefault() is "migrate" or "provision-tenants")
             migratorConnectionString, PostgresMigrator.LoadEmbeddedTenantScripts(), logger);
         Console.WriteLine($"Postgres up to date ({controlApplied} control-plane, {tenantApplied} tenant migration(s) applied).");
     }
-    else
+    else if (args[0] == "provision-tenants")
     {
         var provisioner = new TenantProvisioner(migratorConnectionString, CreateTenantCredentialProtector(builder.Configuration), logger);
         var provisioned = await provisioner.ProvisionPendingAsync();
         Console.WriteLine($"Provisioned {provisioned} Organization(s).");
+    }
+    else
+    {
+        var delivered = await new RevenueOutboxRelay(migratorConnectionString).RelayAsync();
+        Console.WriteLine($"Delivered {delivered} revenue event(s).");
     }
     return;
 }
@@ -54,24 +49,21 @@ if (args.FirstOrDefault() is "migrate" or "provision-tenants")
 var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
 builder.WebHost.UseUrls($"http://+:{port}");
 
-// ── Configuration ─────────────────────────────────────────────────────────
-// Railway sets ConnectionStrings__MongoDb, which ASP.NET's env var provider
-// maps to config key "ConnectionStrings:MongoDb" — read it via GetConnectionString
-// rather than a made-up key/env var name that nothing actually sets.
-var mongoConnectionString = builder.Configuration.GetConnectionString("MongoDb")
-    ?? Environment.GetEnvironmentVariable("MONGO_CONNECTION_STRING")
-    ?? "mongodb://localhost:27017";
-var mongoDatabase = builder.Configuration["MongoDb:Database"]
-    ?? Environment.GetEnvironmentVariable("MONGO_DATABASE")
-    ?? "truvoid";
+var postgresConnectionString = builder.Configuration.GetConnectionString("Postgres")
+    ?? throw new InvalidOperationException(
+        "ConnectionStrings:Postgres is required for the Core API runtime. " +
+        "Use the DML-only truvo_app role, not PostgresMigrator.");
 
-// ── MongoDB ───────────────────────────────────────────────────────────────
-builder.Services.AddSingleton<IMongoClient>(new MongoClient(mongoConnectionString));
-builder.Services.AddSingleton<MongoDbContext>(sp =>
-{
-    var client = sp.GetRequiredService<IMongoClient>();
-    return new MongoDbContext(client, mongoDatabase);
-});
+builder.Services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(postgresConnectionString));
+builder.Services.AddSingleton<PostgresApiKeyStore>();
+builder.Services.AddSingleton(CreateTenantCredentialProtector(builder.Configuration));
+builder.Services.AddSingleton<TenantConnectionFactory>(sp => new TenantConnectionFactory(
+    sp.GetRequiredService<NpgsqlDataSource>(),
+    postgresConnectionString,
+    sp.GetRequiredService<TenantCredentialProtector>()));
+builder.Services.AddScoped<ControlPlaneIdentityStore>();
+builder.Services.AddScoped<TenantWalletService>();
+builder.Services.AddScoped<TenantVerificationService>();
 
 // ── JWT auth ──────────────────────────────────────────────────────────────
 // Railway sets Jwt__SecretKey / Jwt__Issuer / Jwt__Audience (maps to Jwt:SecretKey
@@ -79,7 +71,9 @@ builder.Services.AddSingleton<MongoDbContext>(sp =>
 // sign tokens, or issued tokens fail validation here.
 var jwtSecret = builder.Configuration["Jwt:SecretKey"]
     ?? Environment.GetEnvironmentVariable("JWT_SECRET")
-    ?? "dev-secret-key-change-in-production-32chars!!!";
+    ?? (builder.Environment.IsDevelopment() ? "dev-secret-key-change-in-production-32chars!!!" : null);
+if (string.IsNullOrWhiteSpace(jwtSecret))
+    throw new InvalidOperationException("Jwt:SecretKey (or JWT_SECRET) is required outside Development.");
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "TruvoID";
 var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "TruvoID";
 
@@ -105,45 +99,24 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("TruvoAdmin", policy =>
         policy.RequireAuthenticatedUser()
-              .RequireRole("Admin", "SuperAdmin", "PlatformAdmin"));
+              .RequireRole("Admin", "SuperAdmin", "PlatformAdmin", "platform_admin"));
+    options.AddPolicy("TenantManager", policy =>
+        policy.RequireAuthenticatedUser()
+              .RequireRole("Admin", "institution_admin", "agency_admin", "agency_user"));
 });
 
-// ── HTTP clients for upstream services ────────────────────────────────────
-builder.Services.AddHttpClient("idaccess", client =>
+var corsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>()
+    ?? ["http://localhost:5173"];
+builder.Services.AddCors(options =>
 {
-    client.BaseAddress = new Uri("https://idaccess.info/v1/");
-    client.DefaultRequestHeaders.Add("Accept", "application/json");
-});
-var resendApiKey = Environment.GetEnvironmentVariable("Resend_API_Key")
-    ?? Environment.GetEnvironmentVariable("RESEND_API_KEY");
-builder.Services.AddHttpClient("resend", client =>
-{
-    client.BaseAddress = new Uri("https://api.resend.com/");
-    client.DefaultRequestHeaders.Add("Accept", "application/json");
-    if (!string.IsNullOrEmpty(resendApiKey))
-        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {resendApiKey}");
+    options.AddPolicy("Frontend", policy => policy
+        .WithOrigins(corsOrigins)
+        .AllowAnyHeader()
+        .AllowAnyMethod());
 });
 
 // ── Application services ──────────────────────────────────────────────────
-builder.Services.AddScoped<IPricingService, PricingService>();
-builder.Services.AddScoped<INimcConfigService, NimcConfigService>();
-builder.Services.AddScoped<NotificationFeedService>();
-builder.Services.AddScoped<NotificationPreferenceService>();
-builder.Services.AddScoped<INotificationService, NotificationService>();
-builder.Services.AddScoped<IWalletService, WalletService>();
-builder.Services.AddScoped<IAuditService, AuditService>();
-builder.Services.AddScoped<IVerificationService, VerificationService>();
-
-// Mailer: swap ResendEmailService for a no-op dev implementation if you
-// set NOTIFICATIONS_DISABLED=1 so local dev doesn't blow up on missing API keys.
-if (Environment.GetEnvironmentVariable("NOTIFICATIONS_DISABLED") == "1")
-{
-    builder.Services.AddScoped<IEmailService, DevNullEmailService>();
-}
-else
-{
-    builder.Services.AddScoped<IEmailService, ResendEmailService>();
-}
+builder.Services.AddScoped<IAuditService, PostgresAuditService>();
 
 // ── Build & map endpoints ─────────────────────────────────────────────────
 var app = builder.Build();
@@ -176,6 +149,7 @@ else
 }
 
 app.UseRouting();
+app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -189,13 +163,3 @@ static TenantCredentialProtector CreateTenantCredentialProtector(IConfiguration 
         configuration["Postgres:TenantCredentialKeyId"] ?? "k1",
         configuration["Postgres:TenantCredentialKey"]
             ?? throw new InvalidOperationException("Postgres:TenantCredentialKey is not set."));
-
-// ── Dev-only no-op mailer ─────────────────────────────────────────────────
-public class DevNullEmailService : IEmailService
-{
-    public Task SendAsync(string toEmail, string toName, string subject, string htmlBody)
-    {
-        Console.WriteLine($"[DEV NULL EMAIL] Would send to {toEmail}: {subject}");
-        return Task.CompletedTask;
-    }
-}

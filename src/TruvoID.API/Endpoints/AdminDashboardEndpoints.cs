@@ -1,11 +1,10 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-using MongoDB.Driver;
-using TruvoID.Core.DTOs;
-using TruvoID.Domain.Entities;
+using Npgsql;
+using TruvoID.Core.Interfaces;
 using TruvoID.Domain.Enums;
-using TruvoID.Infrastructure.Data;
+using TruvoID.Infrastructure.Postgres;
 
 namespace TruvoID.API.Endpoints;
 
@@ -14,284 +13,104 @@ public static class AdminDashboardEndpoints
     public static IEndpointRouteBuilder MapAdminDashboardEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/v1/admin").RequireAuthorization("TruvoAdmin");
-
-        group.MapGet("/overview", GetOverview);
-        group.MapGet("/institutions", GetInstitutions);
-        group.MapGet("/admins", GetAdmins);
-        group.MapPost("/admins/invite", InviteAdmin);
-        group.MapPut("/admins/{userId:guid}/role", UpdateAdminRole);
-
         group.MapGet("/api-keys", GetAllApiKeys);
+        group.MapPost("/api-keys/tenants", CreateTenantApiKey);
         group.MapPost("/api-keys/{id:guid}/revoke", RevokeApiKey);
-
-        group.MapGet("/audit", GetAuditLog);
-
         return app;
     }
 
-    private static async Task<IResult> GetAuditLog(
-        int page,
-        int pageSize,
-        MongoDbContext db)
+    private static async Task<IResult> GetAllApiKeys(PostgresApiKeyStore keys, CancellationToken ct)
     {
-        page = page < 1 ? 1 : page;
-        pageSize = pageSize is < 1 or > 200 ? 50 : pageSize;
-
-        var entries = await db.AuditLogs
-            .Find(FilterDefinition<AuditLogEntry>.Empty)
-            .SortByDescending(e => e.CreatedAt)
-            .Skip((page - 1) * pageSize)
-            .Limit(pageSize)
-            .ToListAsync();
-
-        var actorIds = entries.Where(e => e.ActorId.HasValue).Select(e => e.ActorId!.Value).Distinct().ToList();
-        var actors = actorIds.Count == 0
-            ? new List<User>()
-            : await db.Users.Find(u => actorIds.Contains(u.Id)).ToListAsync();
-        var actorEmails = actors.ToDictionary(u => u.Id, u => u.Email);
-
-        var result = entries.Select(e => new AuditLogEntryDto
+        var result = (await keys.ListAllAsync(ct)).Select(key => new AdminApiKeyResponse
         {
-            Id = e.Id,
-            ActorEmail = e.ActorId.HasValue ? actorEmails.GetValueOrDefault(e.ActorId.Value) : null,
-            ActorType = e.ActorType ?? "System",
-            Action = e.Action.ToString(),
-            Entity = e.Entity,
-            EntityId = e.EntityId,
-            DetailsJson = e.DetailsJson,
-            CreatedAt = e.CreatedAt
-        }).ToList();
-
+            Id = key.Id,
+            OrganizationId = key.OrganizationId,
+            OutletId = key.OutletId,
+            KeyPrefix = key.KeyPrefix,
+            Description = key.Description,
+            Scope = key.OutletId.HasValue ? "outlet" : "organization",
+            Status = key.Status,
+            CallCount = key.CallCount,
+            CreatedAt = key.CreatedAt,
+            LastUsedAt = key.LastUsedAt
+        });
         return Results.Ok(result);
     }
 
-    private static async Task<IResult> GetAllApiKeys(MongoDbContext db)
+    private static async Task<IResult> CreateTenantApiKey(
+        HttpContext ctx,
+        CreateTenantApiKeyRequest request,
+        PostgresApiKeyStore keys,
+        NpgsqlDataSource controlPlane,
+        TenantConnectionFactory tenants,
+        IAuditService audit,
+        CancellationToken ct)
     {
-        var keys = await db.ApiKeys.Find(FilterDefinition<ApiKey>.Empty)
-            .SortByDescending(k => k.CreatedAt)
-            .ToListAsync();
-        var institutions = await db.Institutions.Find(FilterDefinition<Institution>.Empty).ToListAsync();
-        var institutionNames = institutions.ToDictionary(i => i.Id, i => i.Name);
+        await using var organization = controlPlane.CreateCommand("""
+            SELECT name, status FROM control.organization WHERE id = @id
+            """);
+        organization.Parameters.AddWithValue("id", request.OrganizationId);
+        await using var reader = await organization.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return Results.NotFound(new { error = "Tenant organization not found." });
+        var organizationName = reader.GetString(0);
+        if (!string.Equals(reader.GetString(1), "active", StringComparison.OrdinalIgnoreCase))
+            return Results.Conflict(new { error = "Tenant organization is not active." });
+        await reader.DisposeAsync();
 
-        var result = keys.Select(k => new AdminApiKeyDto
+        if (request.OutletId is { } outletId)
         {
-            Id = k.Id,
-            InstitutionName = institutionNames.GetValueOrDefault(k.InstitutionId, "Unknown"),
-            KeyPrefix = k.KeyPrefix,
-            Description = k.Description,
-            Status = k.Status,
-            CallCount = k.CallCount,
-            CreatedAt = k.CreatedAt,
-            LastUsedAt = k.LastUsedAt
-        }).ToList();
+            await using var session = await tenants.BeginAsync(TenantScope.Organization(request.OrganizationId), ct);
+            await using var outlet = session.CreateCommand("SELECT id FROM outlet WHERE id = @id");
+            outlet.Parameters.AddWithValue("id", outletId);
+            if (await outlet.ExecuteScalarAsync(ct) is null)
+                return Results.NotFound(new { error = "Outlet not found in this tenant." });
+        }
 
-        return Results.Ok(result);
+        var created = await ApiKeyEndpoints.CreateAsync(
+            keys, request.OrganizationId, request.OutletId, request.Description, ctx.GetUserId(), ct);
+        await audit.LogAsync(AuditAction.ApiKeyGenerated, "ApiKey", created.Stored.Id,
+            ctx.GetUserId(), "User", $"Platform-generated key for {organizationName}", ct);
+
+        return Results.Ok(new ApiKeyResponse
+        {
+            Id = created.Stored.Id.ToString(),
+            KeyPrefix = created.Stored.KeyPrefix,
+            Description = created.Stored.Description,
+            Status = 0,
+            CreatedAt = created.Stored.CreatedAt,
+            RawKey = created.RawKey,
+            Scope = created.Stored.OutletId.HasValue ? "outlet" : "organization",
+            OutletId = created.Stored.OutletId
+        });
     }
 
-    private static async Task<IResult> RevokeApiKey(Guid id, HttpContext ctx, MongoDbContext db, Core.Interfaces.IAuditService audit)
+    private static async Task<IResult> RevokeApiKey(
+        Guid id,
+        HttpContext ctx,
+        PostgresApiKeyStore keys,
+        IAuditService audit,
+        CancellationToken ct)
     {
-        var update = Builders<ApiKey>.Update
-            .Set(k => k.Status, "Revoked")
-            .Set(k => k.RevokedAt, DateTime.UtcNow);
-        var result = await db.ApiKeys.UpdateOneAsync(k => k.Id == id, update);
-
-        if (result.MatchedCount == 0)
+        if (!await keys.RevokeAsync(id, null, ctx.GetUserId(), ct))
             return Results.NotFound(new { error = "API key not found." });
-
-        await audit.LogAsync(AuditAction.ApiKeyRevoked, nameof(ApiKey), id, ctx.GetUserId(), "User", "Revoked by platform admin");
-
+        await audit.LogAsync(AuditAction.ApiKeyRevoked, "ApiKey", id, ctx.GetUserId(), "User", "Revoked by platform admin", ct);
         return Results.Ok(new { message = "API key revoked." });
     }
 
-    private static async Task<IResult> GetOverview(MongoDbContext db)
+    public sealed record CreateTenantApiKeyRequest(Guid OrganizationId, Guid? OutletId, string? Description);
+
+    private sealed class AdminApiKeyResponse
     {
-        var now = DateTime.UtcNow;
-        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var lastMonthStart = monthStart.AddMonths(-1);
-
-        var institutions = await db.Institutions.Find(FilterDefinition<Institution>.Empty).ToListAsync();
-        var allLedgers = await db.WalletLedgers
-            .Find(l => l.CreatedAt >= lastMonthStart)
-            .ToListAsync();
-        var callsMtd = await db.VerificationCalls
-            .Find(c => c.CreatedAt >= monthStart)
-            .ToListAsync();
-        var pendingTopUps = await db.WalletTopUps.CountDocumentsAsync(t => t.Status == "Pending");
-
-        var ledgersMtd = allLedgers.Where(l => l.CreatedAt >= monthStart).ToList();
-        var ledgersLastMonth = allLedgers.Where(l => l.CreatedAt < monthStart).ToList();
-
-        var revenueMtd = ledgersMtd.Where(l => l.Type == "Debit").Sum(l => l.Amount);
-        var costsMtd = ledgersMtd.Where(l => l.Type == "Credit").Sum(l => l.Amount);
-        var revenueLastMonth = ledgersLastMonth.Where(l => l.Type == "Debit").Sum(l => l.Amount);
-        var revenueGrowthPct = revenueLastMonth > 0
-            ? Math.Round((revenueMtd - revenueLastMonth) / revenueLastMonth * 100, 1)
-            : 0;
-
-        // Latest balance per institution = most recent ledger entry overall (not just this month).
-        var latestBalanceByInstitution = await GetLatestBalancesAsync(db, institutions.Select(i => i.Id));
-        var totalWalletBalances = latestBalanceByInstitution.Values.Sum();
-
-        var topInstitutions = institutions
-            .Select(i =>
-            {
-                var calls = callsMtd.Where(c => c.InstitutionId == i.Id).ToList();
-                return new InstitutionVolumeDto
-                {
-                    Id = i.Id,
-                    Name = i.Name,
-                    Email = i.ContactEmail ?? "",
-                    CallsMtd = calls.Count,
-                    RevenueMtd = calls.Sum(c => c.AmountCharged),
-                    Active = i.Status == "Active"
-                };
-            })
-            .OrderByDescending(i => i.RevenueMtd)
-            .Take(5)
-            .ToList();
-
-        var overview = new AdminOverviewDto
-        {
-            RevenueMtd = revenueMtd,
-            CostsMtd = costsMtd,
-            NetMargin = revenueMtd - costsMtd,
-            ActiveInstitutions = institutions.Count(i => i.Status == "Active"),
-            PendingInstitutions = institutions.Count(i => i.Status == "Pending"),
-            TotalApiCallsMtd = callsMtd.Count,
-            TotalWalletBalances = totalWalletBalances,
-            PendingTopUpApprovals = (int)pendingTopUps,
-            RevenueGrowthPct = revenueGrowthPct,
-            NewInstitutionsThisMonth = institutions.Count(i => i.CreatedAt >= monthStart),
-            TopInstitutions = topInstitutions,
-            CallBreakdown = new CallBreakdownDto
-            {
-                NinCalls = callsMtd.Count(c => c.Type == VerificationType.Nin),
-                BvnCalls = callsMtd.Count(c => c.Type == VerificationType.Bvn),
-                PhoneCalls = callsMtd.Count(c => c.Type == VerificationType.Phone)
-            }
-        };
-
-        return Results.Ok(overview);
-    }
-
-    private static async Task<IResult> GetInstitutions(MongoDbContext db)
-    {
-        var institutions = await db.Institutions.Find(FilterDefinition<Institution>.Empty).ToListAsync();
-        var now = DateTime.UtcNow;
-        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var callsMtd = await db.VerificationCalls.Find(c => c.CreatedAt >= monthStart).ToListAsync();
-        var latestBalanceByInstitution = await GetLatestBalancesAsync(db, institutions.Select(i => i.Id));
-
-        var result = institutions.Select(i =>
-        {
-            var balance = latestBalanceByInstitution.GetValueOrDefault(i.Id, 0m);
-            return new AdminInstitutionDto
-            {
-                Id = i.Id,
-                Name = i.Name,
-                Email = i.ContactEmail ?? "",
-                Status = i.Status,
-                WalletBalance = balance,
-                Tokens = Math.Round(balance / 10m, 2), // ₦10 = 1 token display convention
-                ApiCallsMtd = callsMtd.Count(c => c.InstitutionId == i.Id),
-                JoinedDate = i.CreatedAt,
-                Type = i.Type ?? ""
-            };
-        }).ToList();
-
-        return Results.Ok(result);
-    }
-
-    private static async Task<IResult> GetAdmins(MongoDbContext db)
-    {
-        var users = await db.Users.Find(FilterDefinition<User>.Empty).ToListAsync();
-
-        var result = users
-            .OrderByDescending(u => u.Role == "PlatformAdmin")
-            .ThenBy(u => u.FullName)
-            .Select(u => new AdminUserDto
-            {
-                UserId = u.Id,
-                Email = u.Email,
-                FullName = u.FullName ?? "",
-                Role = u.Role,
-                IsActive = u.IsActive,
-                CreatedAt = u.CreatedAt,
-                LastLoginAt = u.LastLoginAt
-            })
-            .ToList();
-
-        return Results.Ok(result);
-    }
-
-    private static async Task<IResult> InviteAdmin(
-        HttpContext ctx,
-        InviteAdminRequest request,
-        MongoDbContext db,
-        Core.Interfaces.IAuditService audit)
-    {
-        if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.FullName) || string.IsNullOrWhiteSpace(request.Password))
-            return Results.BadRequest(new { error = "Email, full name, and password are required." });
-
-        var email = request.Email.Trim().ToLowerInvariant();
-        var existing = await db.Users.Find(u => u.Email == email).FirstOrDefaultAsync();
-        if (existing is not null)
-            return Results.Conflict(new { error = "A user with this email already exists." });
-
-        var newAdmin = new User
-        {
-            Id = Guid.NewGuid(),
-            InstitutionId = Guid.Empty, // platform-level account, not scoped to an institution
-            Email = email,
-            FullName = request.FullName.Trim(),
-            PasswordHash = AuthEndpoints.HashPassword(request.Password),
-            Role = "PlatformAdmin",
-            IsActive = true,
-            CreatedAt = DateTime.UtcNow
-        };
-        await db.Users.InsertOneAsync(newAdmin);
-        await audit.LogAsync(AuditAction.Created, nameof(User), newAdmin.Id, ctx.GetUserId(), "User", $"Invited platform admin: {email}");
-
-        return Results.Ok(new { message = "Platform admin invited." });
-    }
-
-    private static async Task<IResult> UpdateAdminRole(
-        Guid userId,
-        HttpContext ctx,
-        UpdateRoleRequest request,
-        MongoDbContext db,
-        Core.Interfaces.IAuditService audit)
-    {
-        if (request.Role != "Admin" && request.Role != "Staff")
-            return Results.BadRequest(new { error = "Role must be 'Admin' or 'Staff'." });
-
-        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
-        if (user is null)
-            return Results.NotFound(new { error = "User not found." });
-
-        if (user.Role == "PlatformAdmin")
-            return Results.BadRequest(new { error = "Platform admin role cannot be changed here." });
-
-        var update = Builders<User>.Update
-            .Set(u => u.Role, request.Role)
-            .Set(u => u.UpdatedAt, DateTime.UtcNow);
-        await db.Users.UpdateOneAsync(u => u.Id == userId, update);
-        await audit.LogAsync(AuditAction.RoleChanged, nameof(User), userId, ctx.GetUserId(), "User", $"{user.Role} → {request.Role}");
-
-        return Results.Ok(new { message = "Role updated." });
-    }
-
-    private static async Task<Dictionary<Guid, decimal>> GetLatestBalancesAsync(MongoDbContext db, IEnumerable<Guid> institutionIds)
-    {
-        var result = new Dictionary<Guid, decimal>();
-        foreach (var id in institutionIds)
-        {
-            var last = await db.WalletLedgers
-                .Find(l => l.InstitutionId == id)
-                .SortByDescending(l => l.CreatedAt)
-                .FirstOrDefaultAsync();
-            result[id] = last?.BalanceAfter ?? 0m;
-        }
-        return result;
+        public Guid Id { get; init; }
+        public Guid OrganizationId { get; init; }
+        public Guid? OutletId { get; init; }
+        public string KeyPrefix { get; init; } = "";
+        public string? Description { get; init; }
+        public string Scope { get; init; } = "organization";
+        public string Status { get; init; } = "active";
+        public long CallCount { get; init; }
+        public DateTime CreatedAt { get; init; }
+        public DateTime? LastUsedAt { get; init; }
     }
 }

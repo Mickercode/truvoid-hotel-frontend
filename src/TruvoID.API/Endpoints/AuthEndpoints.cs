@@ -6,11 +6,10 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.IdentityModel.Tokens;
-using MongoDB.Driver;
+using Npgsql;
 using TruvoID.Core.Interfaces;
-using TruvoID.Domain.Entities;
 using TruvoID.Domain.Enums;
-using TruvoID.Infrastructure.Data;
+using TruvoID.Infrastructure.Postgres;
 
 namespace TruvoID.API.Endpoints;
 
@@ -50,7 +49,7 @@ public static class AuthEndpoints
     private static async Task<IResult> ChangePassword(
         HttpContext ctx,
         ChangePasswordRequest request,
-        MongoDbContext db)
+        ControlPlaneIdentityStore identities)
     {
         var userId = ctx.GetUserId();
         if (userId == Guid.Empty) return Results.Unauthorized();
@@ -58,142 +57,92 @@ public static class AuthEndpoints
         if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
             return Results.BadRequest(new { error = "New password must be at least 8 characters." });
 
-        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
+        var user = await identities.FindByIdAsync(userId);
         if (user is null) return Results.Unauthorized();
 
-        if (user.PasswordHash != HashPassword(request.CurrentPassword))
+        if (!PasswordHasher.Verify(request.CurrentPassword, user.CredentialHash))
             return Results.BadRequest(new { error = "Current password is incorrect." });
 
-        var update = Builders<User>.Update
-            .Set(u => u.PasswordHash, HashPassword(request.NewPassword))
-            .Set(u => u.UpdatedAt, DateTime.UtcNow);
-        await db.Users.UpdateOneAsync(u => u.Id == userId, update);
+        await identities.UpdatePasswordAsync(userId, PasswordHasher.Hash(request.NewPassword));
 
         return Results.Ok(new { message = "Password changed successfully." });
     }
 
     private static async Task<IResult> DeactivateAccount(
         HttpContext ctx,
-        MongoDbContext db)
+        ControlPlaneIdentityStore identities)
     {
-        var institutionId = ctx.GetInstitutionId();
-        if (institutionId == Guid.Empty) return Results.Unauthorized();
-
-        var update = Builders<Institution>.Update
-            .Set(i => i.Status, "Suspended")
-            .Set(i => i.UpdatedAt, DateTime.UtcNow);
-        var result = await db.Institutions.UpdateOneAsync(i => i.Id == institutionId, update);
-
-        if (result.MatchedCount == 0)
-            return Results.NotFound(new { error = "Institution not found." });
+        var organizationId = ctx.GetOrganizationId();
+        if (organizationId == Guid.Empty) return Results.Unauthorized();
+        if (!await identities.DeactivateOrganizationAsync(organizationId))
+            return Results.NotFound(new { error = "Organization not found." });
 
         return Results.Ok(new { message = "Account deactivated." });
     }
 
     private static async Task<IResult> Register(
         RegisterRequest request,
-        MongoDbContext db)
+        ControlPlaneIdentityStore identities)
     {
-        // Check if institution with this email already exists
-        var existing = await db.Institutions
-            .Find(i => i.ContactEmail == request.ContactEmail)
-            .FirstOrDefaultAsync();
-
-        if (existing is not null)
-            return Results.Conflict(new { error = "An institution with this email already exists." });
-
-        // users.Email and institutions.Name both have unique indexes at the DB level —
-        // check both here so a collision is a clean 409 instead of an unhandled
-        // MongoWriteException (duplicate key) surfacing as a 500.
-        var existingUser = await db.Users.Find(u => u.Email == request.AdminEmail).FirstOrDefaultAsync();
-        if (existingUser is not null)
-            return Results.Conflict(new { error = "An account with this email already exists." });
-
-        var existingName = await db.Institutions.Find(i => i.Name == request.InstitutionName).FirstOrDefaultAsync();
-        if (existingName is not null)
-            return Results.Conflict(new { error = "An institution with this name is already registered." });
-
-        var institutionId = Guid.NewGuid();
-        var adminId = Guid.NewGuid();
-        var passwordHash = HashPassword(request.Password);
-
-        var institution = new Institution
-        {
-            Id = institutionId,
-            Name = request.InstitutionName,
-            ContactEmail = request.ContactEmail,
-            ContactPhone = request.ContactPhone,
-            Status = "Pending", // IMPORTANT: do NOT auto-approve — admin must approve
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
-
-        var adminUser = new User
-        {
-            Id = adminId,
-            InstitutionId = institutionId,
-            Email = request.AdminEmail,
-            FullName = request.AdminFullName,
-            PasswordHash = passwordHash,
-            Role = "Admin",
-            IsActive = true,
-            CreatedAt = DateTime.UtcNow
-        };
-
         try
         {
-            await db.Institutions.InsertOneAsync(institution);
-            await db.Users.InsertOneAsync(adminUser);
+            var organizationType = request.Type.Trim().ToLowerInvariant() switch
+            {
+                "institution" => OrganizationType.Institution,
+                _ => throw new ArgumentException("Public registration is for institutions only. Agencies are invited by platform administrators.", nameof(request.Type))
+            };
+            var registered = await identities.RegisterOrganizationAsync(
+                request.InstitutionName,
+                organizationType,
+                request.AdminFullName,
+                request.AdminEmail,
+                request.Password);
+
+            var (accessToken, refreshToken, expiresAt) = GenerateTokens(
+                registered.OrganizationId,
+                registered.UserId,
+                "Admin",
+                tenantRole: organizationType == OrganizationType.Agency ? "agency_admin" : "institution_admin");
+
+            return Results.Ok(new RegisterResponse
+            {
+                AccessToken = accessToken,
+                RefreshToken = refreshToken,
+                ExpiresAt = expiresAt
+            });
         }
-        catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        catch (ArgumentException ex)
         {
-            // Defensive backstop for a race between the checks above and the insert.
+            return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
             return Results.Conflict(new { error = "An account with this email or institution name already exists." });
         }
-
-        // Generate JWT tokens
-        var (accessToken, refreshToken, expiresAt) = GenerateTokens(institutionId, adminId, "Admin");
-
-        return Results.Ok(new RegisterResponse
-        {
-            AccessToken = accessToken,
-            RefreshToken = refreshToken,
-            ExpiresAt = expiresAt
-        });
     }
 
     private static async Task<IResult> Login(
         LoginRequest request,
-        MongoDbContext db,
+        ControlPlaneIdentityStore identities,
         IAuditService audit)
     {
-        var user = await db.Users
-            .Find(u => u.Email == request.Email && u.PasswordHash == HashPassword(request.Password))
-            .FirstOrDefaultAsync();
+        var user = await identities.FindByEmailAsync(request.Email);
 
-        if (user is null)
+        if (user is null || !PasswordHasher.Verify(request.Password, user.CredentialHash))
             return Results.Unauthorized();
 
-        if (!user.IsActive)
+        if (user.Status != "active")
             return Results.Forbid();
 
-        // Platform-level accounts (e.g. PlatformAdmin) aren't scoped to an institution.
-        if (user.InstitutionId != Guid.Empty)
-        {
-            var institution = await db.Institutions
-                .Find(i => i.Id == user.InstitutionId)
-                .FirstOrDefaultAsync();
+        await identities.MarkLoginAsync(user.Id);
+        await audit.LogAsync(AuditAction.Login, "User", user.Id, user.Id, "User");
 
-            if (institution is null)
-                return Results.NotFound(new { error = "Institution not found." });
-        }
-
-        var now = DateTime.UtcNow;
-        await db.Users.UpdateOneAsync(u => u.Id == user.Id,
-            Builders<User>.Update.Set(u => u.LastLoginAt, now));
-        await audit.LogAsync(AuditAction.Login, nameof(User), user.Id, user.Id, "User");
-
-        var (accessToken, refreshToken, expiresAt) = GenerateTokens(user.InstitutionId, user.Id, user.Role);
+        var (accessToken, refreshToken, expiresAt) = GenerateTokens(
+            user.OrganizationId ?? Guid.Empty,
+            user.Id,
+            ToLegacyClaimRole(user.Role),
+            user.OutletId,
+            user.Role);
 
         return Results.Ok(new LoginResponse
         {
@@ -205,21 +154,29 @@ public static class AuthEndpoints
 
     private static async Task<IResult> RefreshToken(
         RefreshTokenRequest request,
-        MongoDbContext db)
+        ControlPlaneIdentityStore identities)
     {
         // Validate the old access token and issue new tokens.
         // institutionId == Guid.Empty is valid for platform-level accounts — only a
         // missing/invalid userId means the token itself didn't parse.
-        var (userId, institutionId, role) = GetClaimsFromToken(request.OldAccessToken);
+        var (userId, _, _) = GetClaimsFromToken(request.OldAccessToken);
 
         if (userId == Guid.Empty)
             return Results.Unauthorized();
 
-        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
+        var user = await identities.FindByIdAsync(userId);
         if (user is null)
             return Results.Unauthorized();
 
-        var (accessToken, refreshToken, expiresAt) = GenerateTokens(institutionId, userId, user.Role);
+        if (user.Status != "active")
+            return Results.Forbid();
+
+        var (accessToken, refreshToken, expiresAt) = GenerateTokens(
+            user.OrganizationId ?? Guid.Empty,
+            userId,
+            ToLegacyClaimRole(user.Role),
+            user.OutletId,
+            user.Role);
 
         return Results.Ok(new LoginResponse
         {
@@ -231,7 +188,7 @@ public static class AuthEndpoints
 
     private static async Task<IResult> GetCurrentUser(
         HttpContext ctx,
-        MongoDbContext db)
+        ControlPlaneIdentityStore identities)
     {
         // Extract claims from the JWT in the Authorization header
         var authHeader = ctx.Request.Headers.Authorization.ToString();
@@ -244,28 +201,18 @@ public static class AuthEndpoints
         if (userId == Guid.Empty)
             return Results.Unauthorized();
 
-        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync();
+        var user = await identities.FindByIdAsync(userId);
         if (user is null)
             return Results.Unauthorized();
-
-        // Platform-level accounts (e.g. PlatformAdmin) aren't scoped to an institution.
-        var institutionName = string.Empty;
-        if (institutionId != Guid.Empty)
-        {
-            var institution = await db.Institutions.Find(i => i.Id == institutionId).FirstOrDefaultAsync();
-            if (institution is null)
-                return Results.NotFound(new { error = "Institution not found." });
-            institutionName = institution.Name;
-        }
 
         return Results.Ok(new AuthProfileResponse
         {
             UserId = user.Id.ToString(),
-            InstitutionId = institutionId.ToString(),
+            InstitutionId = (user.OrganizationId ?? Guid.Empty).ToString(),
             Email = user.Email,
             FullName = user.FullName ?? string.Empty,
-            Role = user.Role,
-            InstitutionName = institutionName
+            Role = ToLegacyClaimRole(user.Role),
+            InstitutionName = user.OrganizationName
         });
     }
 
@@ -276,6 +223,14 @@ public static class AuthEndpoints
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(password));
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
+
+    private static string ToLegacyClaimRole(string role) => role switch
+    {
+        "platform_admin" => "PlatformAdmin",
+        "institution_admin" or "agency_admin" => "Admin",
+        "institution_staff" or "agency_user" or "outlet_owner" or "outlet_staff" => "Staff",
+        _ => role
+    };
 
     // Railway sets Jwt__SecretKey / Jwt__Issuer / Jwt__Audience / Jwt__ExpiryMinutes
     // (JWT_SECRET is kept as a fallback name). Must match what Program.cs reads for
@@ -290,7 +245,12 @@ public static class AuthEndpoints
     private static int JwtExpiryMinutes =>
         int.TryParse(Environment.GetEnvironmentVariable("Jwt__ExpiryMinutes"), out var m) ? m : 60;
 
-    private static (string access, string refresh, DateTime expires) GenerateTokens(Guid institutionId, Guid userId, string role)
+    private static (string access, string refresh, DateTime expires) GenerateTokens(
+        Guid organizationId,
+        Guid userId,
+        string role,
+        Guid? outletId = null,
+        string? tenantRole = null)
     {
         var now = DateTime.UtcNow;
         var expiresAt = now.AddMinutes(JwtExpiryMinutes);
@@ -301,12 +261,19 @@ public static class AuthEndpoints
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
-            new Claim("institution_id", institutionId.ToString()),
+            new Claim("institution_id", organizationId.ToString()),
+            new Claim("organization_id", organizationId.ToString()),
             new Claim("role", role),
+            new Claim("tenant_role", tenantRole ?? role),
             new Claim(ClaimTypes.Role, role),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
             new Claim(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now, DateTimeOffset.Now.Offset).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
         };
+
+        if (outletId.HasValue)
+            claims = claims.Append(new Claim("outlet_id", outletId.Value.ToString())).ToArray();
+        if (!string.IsNullOrWhiteSpace(tenantRole) && tenantRole != role)
+            claims = claims.Append(new Claim(ClaimTypes.Role, tenantRole)).ToArray();
 
         var token = new JwtSecurityToken(
             issuer: JwtIssuer,
@@ -374,6 +341,7 @@ public static class AuthEndpoints
         public string AdminEmail { get; init; } = "";
         public string AdminPhone { get; init; } = "";
         public string Password { get; init; } = "";
+        public string Type { get; init; } = "institution";
     }
 
     public record LoginRequest

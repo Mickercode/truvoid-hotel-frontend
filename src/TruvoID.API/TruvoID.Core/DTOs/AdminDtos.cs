@@ -131,11 +131,14 @@ public record UpdateInstitutionPricingRequest
 public class AdminApiKeyDto
 {
     public Guid Id { get; set; }
+    public Guid? OrganizationId { get; set; }
+    public Guid? OutletId { get; set; }
+    public string Scope { get; set; } = "institution";
     public string InstitutionName { get; set; } = string.Empty;
     public string KeyPrefix { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string Status { get; set; } = string.Empty;
-    public int CallCount { get; set; }
+    public long CallCount { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? LastUsedAt { get; set; }
 }

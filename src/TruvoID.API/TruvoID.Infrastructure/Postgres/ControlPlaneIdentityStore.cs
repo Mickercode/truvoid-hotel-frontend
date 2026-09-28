@@ -1,0 +1,272 @@
+using Npgsql;
+
+namespace TruvoID.Infrastructure.Postgres;
+
+public sealed record ControlPlaneUser(
+    Guid Id,
+    Guid? OrganizationId,
+    Guid? OutletId,
+    string Email,
+    string? FullName,
+    string CredentialHash,
+    string Role,
+    string Status,
+    string OrganizationName);
+
+public sealed record RegisteredIdentity(Guid UserId, Guid OrganizationId);
+public sealed record AgencyInvitation(Guid InvitationId, Guid OrganizationId, Guid UserId);
+
+/// <summary>
+/// Central identity access. Authentication must resolve the Organization before
+/// the API can open a dedicated tenant connection.
+/// </summary>
+public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
+{
+    public Task<RegisteredIdentity> RegisterInstitutionAsync(
+        string organizationName,
+        string contactEmail,
+        string adminName,
+        string adminEmail,
+        string password,
+        CancellationToken ct = default) =>
+        RegisterOrganizationAsync(organizationName, OrganizationType.Institution, adminName, adminEmail, password, ct);
+
+    public async Task<AgencyInvitation> InviteAgencyAsync(
+        string organizationName,
+        string adminName,
+        string adminEmail,
+        Guid invitedByUserId,
+        string tokenHash,
+        DateTime expiresAt,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(organizationName) || string.IsNullOrWhiteSpace(adminEmail))
+            throw new ArgumentException("Agency name and administrator email are required.");
+
+        var organizationId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var invitationId = Guid.NewGuid();
+        await using var conn = await controlPlane.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        await using (var organization = new NpgsqlCommand("""
+            INSERT INTO control.organization (id, name, type, schema_name, db_role_name)
+            VALUES (@id, @name, 'agency', @schema, @role)
+            """, conn, tx))
+        {
+            organization.Parameters.AddWithValue("id", organizationId);
+            organization.Parameters.AddWithValue("name", organizationName.Trim());
+            organization.Parameters.AddWithValue("schema", $"org_{organizationId:N}");
+            organization.Parameters.AddWithValue("role", $"org_{organizationId:N}_rw");
+            await organization.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var user = new NpgsqlCommand("""
+            INSERT INTO control.app_user
+                (id, email, full_name, credential_hash, organization_id, role, status)
+            VALUES (@id, @email, @fullName, @credentialHash, @organizationId, 'agency_admin', 'invited')
+            """, conn, tx))
+        {
+            user.Parameters.AddWithValue("id", userId);
+            user.Parameters.AddWithValue("email", adminEmail.Trim().ToLowerInvariant());
+            user.Parameters.AddWithValue("fullName", (object?)adminName?.Trim() ?? DBNull.Value);
+            user.Parameters.AddWithValue("credentialHash", PasswordHasher.Hash(Guid.NewGuid().ToString("N")));
+            user.Parameters.AddWithValue("organizationId", organizationId);
+            await user.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var invitation = new NpgsqlCommand("""
+            INSERT INTO control.agency_invitation
+                (id, organization_id, user_id, token_hash, expires_at, created_by_user_id)
+            VALUES (@id, @organizationId, @userId, @tokenHash, @expiresAt, @createdBy)
+            """, conn, tx))
+        {
+            invitation.Parameters.AddWithValue("id", invitationId);
+            invitation.Parameters.AddWithValue("organizationId", organizationId);
+            invitation.Parameters.AddWithValue("userId", userId);
+            invitation.Parameters.AddWithValue("tokenHash", tokenHash);
+            invitation.Parameters.AddWithValue("expiresAt", expiresAt);
+            invitation.Parameters.AddWithValue("createdBy", invitedByUserId);
+            await invitation.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+        return new AgencyInvitation(invitationId, organizationId, userId);
+    }
+
+    public async Task<ControlPlaneUser?> AcceptAgencyInvitationAsync(
+        string tokenHash,
+        string password,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
+            throw new ArgumentException("Password must be at least 8 characters.");
+
+        await using var conn = await controlPlane.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        Guid userId;
+        await using (var find = new NpgsqlCommand("""
+            SELECT user_id
+            FROM control.agency_invitation
+            WHERE token_hash = @tokenHash
+              AND accepted_at IS NULL
+              AND expires_at > now()
+            FOR UPDATE
+            """, conn, tx))
+        {
+            find.Parameters.AddWithValue("tokenHash", tokenHash);
+            var value = await find.ExecuteScalarAsync(ct);
+            if (value is not Guid foundUserId)
+                return null;
+            userId = foundUserId;
+        }
+
+        await using (var user = new NpgsqlCommand("""
+            UPDATE control.app_user
+            SET credential_hash = @credentialHash, status = 'active', updated_at = now()
+            WHERE id = @id AND role = 'agency_admin'
+            """, conn, tx))
+        {
+            user.Parameters.AddWithValue("credentialHash", PasswordHasher.Hash(password));
+            user.Parameters.AddWithValue("id", userId);
+            if (await user.ExecuteNonQueryAsync(ct) != 1)
+                return null;
+        }
+
+        await using (var accepted = new NpgsqlCommand(
+            "UPDATE control.agency_invitation SET accepted_at = now() WHERE token_hash = @tokenHash", conn, tx))
+        {
+            accepted.Parameters.AddWithValue("tokenHash", tokenHash);
+            await accepted.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+        return await FindByIdAsync(userId, ct);
+    }
+
+    public async Task<RegisteredIdentity> RegisterOrganizationAsync(
+        string organizationName,
+        OrganizationType type,
+        string adminName,
+        string adminEmail,
+        string password,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(organizationName) || string.IsNullOrWhiteSpace(adminEmail))
+            throw new ArgumentException("Organization name and administrator email are required.");
+
+        var organizationId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var adminRole = type == OrganizationType.Agency ? "agency_admin" : "institution_admin";
+        await using var conn = await controlPlane.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        await using (var organization = new NpgsqlCommand("""
+            INSERT INTO control.organization (id, name, type, schema_name, db_role_name)
+            VALUES (@id, @name, @type, @schema, @role)
+            """, conn, tx))
+        {
+            organization.Parameters.AddWithValue("id", organizationId);
+            organization.Parameters.AddWithValue("name", organizationName.Trim());
+            organization.Parameters.AddWithValue("type", OrganizationRegistry.ToDbValue(type));
+            organization.Parameters.AddWithValue("schema", $"org_{organizationId:N}");
+            organization.Parameters.AddWithValue("role", $"org_{organizationId:N}_rw");
+            await organization.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var user = new NpgsqlCommand("""
+            INSERT INTO control.app_user
+                (id, email, full_name, credential_hash, organization_id, role, status)
+            VALUES (@id, @email, @fullName, @credentialHash, @organizationId, @role, 'active')
+            """, conn, tx))
+        {
+            user.Parameters.AddWithValue("id", userId);
+            user.Parameters.AddWithValue("email", adminEmail.Trim().ToLowerInvariant());
+            user.Parameters.AddWithValue("fullName", (object?)adminName?.Trim() ?? DBNull.Value);
+            user.Parameters.AddWithValue("credentialHash", PasswordHasher.Hash(password));
+            user.Parameters.AddWithValue("organizationId", organizationId);
+            user.Parameters.AddWithValue("role", adminRole);
+            await user.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+        return new RegisteredIdentity(userId, organizationId);
+    }
+
+    public async Task<ControlPlaneUser?> FindByEmailAsync(string email, CancellationToken ct = default) =>
+        await FindAsync("WHERE lower(u.email) = lower(@email)", command => command.Parameters.AddWithValue("email", email.Trim()), ct);
+
+    public async Task<ControlPlaneUser?> FindByIdAsync(Guid userId, CancellationToken ct = default) =>
+        await FindAsync("WHERE u.id = @id", command => command.Parameters.AddWithValue("id", userId), ct);
+
+    public async Task<bool> UpdatePasswordAsync(Guid userId, string passwordHash, CancellationToken ct = default)
+    {
+        await using var command = controlPlane.CreateCommand("""
+            UPDATE control.app_user
+            SET credential_hash = @credentialHash, updated_at = now()
+            WHERE id = @id
+            """);
+        command.Parameters.AddWithValue("id", userId);
+        command.Parameters.AddWithValue("credentialHash", passwordHash);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task MarkLoginAsync(Guid userId, CancellationToken ct = default)
+    {
+        await using var command = controlPlane.CreateCommand(
+            "UPDATE control.app_user SET last_login_at = now() WHERE id = @id");
+        command.Parameters.AddWithValue("id", userId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> DeactivateOrganizationAsync(Guid organizationId, CancellationToken ct = default)
+    {
+        await using var conn = await controlPlane.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using (var organization = new NpgsqlCommand("UPDATE control.organization SET status = 'suspended', updated_at = now() WHERE id = @id", conn, tx))
+        {
+            organization.Parameters.AddWithValue("id", organizationId);
+            if (await organization.ExecuteNonQueryAsync(ct) != 1)
+                return false;
+        }
+
+        await using (var users = new NpgsqlCommand("UPDATE control.app_user SET status = 'suspended', updated_at = now() WHERE organization_id = @id", conn, tx))
+        {
+            users.Parameters.AddWithValue("id", organizationId);
+            await users.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    private async Task<ControlPlaneUser?> FindAsync(
+        string predicate,
+        Action<NpgsqlCommand> bind,
+        CancellationToken ct)
+    {
+        await using var command = controlPlane.CreateCommand($"""
+            SELECT u.id, u.organization_id, u.outlet_id, u.email, u.full_name,
+                   u.credential_hash, u.role, u.status, coalesce(o.name, '')
+            FROM control.app_user u
+            LEFT JOIN control.organization o ON o.id = u.organization_id
+            {predicate}
+            LIMIT 1
+            """);
+        bind(command);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return null;
+
+        return new ControlPlaneUser(
+            reader.GetGuid(0),
+            reader.IsDBNull(1) ? null : reader.GetGuid(1),
+            reader.IsDBNull(2) ? null : reader.GetGuid(2),
+            reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetString(5),
+            reader.GetString(6),
+            reader.GetString(7),
+            reader.GetString(8));
+    }
+}
