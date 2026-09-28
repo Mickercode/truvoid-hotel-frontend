@@ -95,6 +95,7 @@
 .marketing-nav { position: fixed; inset: 0 0 auto; z-index: 20; border-bottom: 1px solid var(--mk-line); background: rgba(7, 16, 24, .78); backdrop-filter: blur(18px); }
 .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 74px; }
 .marketing-logo { display: inline-flex; align-items: center; gap: 10px; color: var(--mk-text); font: 700 20px 'Space Grotesk', Inter, sans-serif; letter-spacing: -.04em; }
+.marketing-logo img { width: 30px; height: 30px; object-fit: cover; border-radius: 7px; }
 .marketing-logo span { display: grid; width: 30px; height: 30px; place-items: center; color: #071018; background: var(--mk-cyan); border-radius: 7px; font: 800 15px 'JetBrains Mono', monospace; }
 .marketing-nav nav { display: flex; gap: 28px; margin-left: 80px; }
 .marketing-nav nav a, .nav-actions a { color: var(--mk-muted); font-size: 13px; transition: color .2s ease; }
