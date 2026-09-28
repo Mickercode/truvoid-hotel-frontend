@@ -10,6 +10,7 @@ packages/
 .vs/
 *.userprefs
 node_modules/
+web/dist/
 .idea/
 
 # Secrets - never commit
