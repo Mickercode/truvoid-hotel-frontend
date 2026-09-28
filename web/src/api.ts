@@ -41,7 +41,7 @@ export const tokenStore = {
 
 async function request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(init.headers)
-  headers.set('Content-Type', 'application/json')
+  if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   if (tokenStore.accessToken) headers.set('Authorization', `Bearer ${tokenStore.accessToken}`)
 
   const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
@@ -71,6 +71,7 @@ export const api = {
   post: <T>(path: string, body: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body) }),
   put: <T>(path: string, body: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  upload: <T>(path: string, body: FormData) => request<T>(path, { method: 'POST', body }),
   login: (email: string, password: string) => request<Tokens>('/v1/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),

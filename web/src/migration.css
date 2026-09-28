@@ -58,9 +58,29 @@
 .landing > div { margin: auto 0; max-width: 600px; }
 .landing h1 { margin: 18px 0; font-size: clamp(65px, 10vw, 130px); line-height: .83; letter-spacing: -.09em; }
 .landing-actions { display: flex; align-items: center; gap: 25px; margin-top: 35px; }
+.setup-progress { display: grid; gap: 12px; max-width: 720px; margin-bottom: 28px; }
+.setup-progress strong { display: block; margin-top: 8px; font-size: 30px; }
+.progress-track { height: 6px; background: #1d2930; }
+.progress-track span { display: block; height: 100%; background: var(--cyan); transition: width .25s ease; }
+.setup-layout { display: grid; grid-template-columns: 220px minmax(0, 720px); gap: 25px; align-items: start; }
+.setup-nav { display: grid; gap: 5px; }
+.setup-nav .step { border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; }
+.setup-nav .step.active { border-color: var(--line); }
+.setup-card { max-width: none; }
+.setup-card h2 { margin: 0; font-size: 28px; }
+.setup-card h3 { margin: 12px 0 -5px; color: #eef2f8; font-size: 15px; }
+.setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 8px; }
+.access-levels { display: grid; gap: 10px; }
+.access-level { display: grid; gap: 6px; padding: 16px; border: 1px solid var(--line); background: #0d1118; color: #eef2f8; text-align: left; cursor: pointer; }
+.access-level span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.access-level.selected { border-color: var(--cyan); background: #122421; }
+.document-list, .review-list { display: grid; gap: 8px; }
+.document-row, .review-list > div { display: flex; justify-content: space-between; gap: 18px; padding: 13px 14px; border: 1px solid var(--line); background: #0d1118; font-size: 12px; }
+.document-row span, .review-list span { color: var(--muted); }
+.upload-button { display: inline-block; width: fit-content; cursor: pointer; }
 
 @media (max-width: 760px) {
-  .result-grid, .split-grid { grid-template-columns: 1fr; }
+  .result-grid, .split-grid, .setup-layout { grid-template-columns: 1fr; }
   .wallet-hero { display: grid; gap: 22px; }
   .onboarding-body { display: block; padding: 35px 22px 70px; }
   .onboarding-body aside { display: flex; overflow-x: auto; margin-bottom: 42px; }

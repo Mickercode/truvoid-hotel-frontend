@@ -56,6 +56,7 @@ var postgresConnectionString = builder.Configuration.GetConnectionString("Postgr
 
 builder.Services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(postgresConnectionString));
 builder.Services.AddSingleton<PostgresApiKeyStore>();
+builder.Services.AddSingleton<OrganizationSetupStore>();
 builder.Services.AddSingleton(CreateTenantCredentialProtector(builder.Configuration));
 builder.Services.AddSingleton<TenantConnectionFactory>(sp => new TenantConnectionFactory(
     sp.GetRequiredService<NpgsqlDataSource>(),

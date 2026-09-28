@@ -40,6 +40,15 @@ Agency invitation acceptance:
 
 - `POST /v1/auth/agency-invitations/accept`
 
+Organization setup:
+
+- `GET /v1/tenant/setup`
+- `PUT /v1/tenant/setup/{section}`
+- `PUT /v1/tenant/setup/access-level`
+- `PUT /v1/tenant/setup/attestation`
+- `POST /v1/tenant/setup/documents`
+- `POST /v1/tenant/setup/submit`
+
 Platform-admin key revocation/listing:
 
 - `GET /v1/admin/api-keys`
@@ -72,6 +81,7 @@ Important migrations:
 - `ControlPlane/0002_tenant_credentials.sql`: encrypted per-organization database credentials.
 - `ControlPlane/0003_api_key_usage.sql`: API-key `call_count` metadata and runtime update grant.
 - `ControlPlane/0004_agency_invitations.sql`: PostgreSQL agency invitation tokens and acceptance state.
+- `ControlPlane/0005_organization_setup.sql`: progressive organization profile and supporting documents.
 - `Tenant/0001_tenant_core.sql`: tenant tables, wallets, outlets, verification calls, RLS, and append-only ledger rules.
 - `Tenant/0002_outbox_delivery.sql`: revenue outbox delivery state.
 

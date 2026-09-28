@@ -8,6 +8,7 @@ public static class EndpointRegistration
     {
         app.MapAuthEndpoints();
         app.MapAgencyInvitationEndpoints();
+        app.MapOrganizationSetupEndpoints();
         app.MapAdminDashboardEndpoints();
         app.MapApiKeyEndpoints();
         app.MapTenantEndpoints();
