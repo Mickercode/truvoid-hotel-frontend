@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TruvoID API documentation</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #071018; color: #e7f0f3; }
+      body { margin: 0; background: radial-gradient(circle at 80% 0%, #15343b 0, transparent 36rem), #071018; }
+      main { width: min(960px, calc(100% - 40px)); margin: 0 auto; padding: 64px 0 96px; }
+      .eyebrow { color: #68e0c0; font-size: 12px; letter-spacing: .16em; font-weight: 700; }
+      h1 { font-size: clamp(36px, 7vw, 72px); line-height: .98; letter-spacing: -.05em; max-width: 700px; margin: 20px 0; }
+      h2 { margin-top: 52px; font-size: 26px; }
+      p, li { color: #a9bbc0; line-height: 1.7; }
+      code, pre { font-family: "SFMono-Regular", Consolas, monospace; }
+      code { color: #9df4d9; }
+      pre { overflow: auto; padding: 20px; border: 1px solid #24434a; border-radius: 12px; background: #0b1b23; color: #d7f8ee; line-height: 1.6; }
+      .card { margin-top: 28px; padding: 24px; border: 1px solid #24434a; border-radius: 16px; background: rgba(13, 31, 39, .78); }
+      .method { display: inline-block; margin-right: 10px; color: #071018; background: #68e0c0; border-radius: 5px; padding: 4px 8px; font-size: 12px; font-weight: 800; }
+      .path { font-family: monospace; color: #fff; }
+      a { color: #68e0c0; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">TRUVOID / AGENCY API</div>
+      <h1>Connect every outlet to one trusted verification layer.</h1>
+      <p>Agency administrators can create an API key for each outlet. Keys are shown once, stored as hashes, and restricted to the outlet that owns them.</p>
+
+      <h2>Authentication</h2>
+      <p>Send the outlet key with every request using the <code>X-API-Key</code> header.</p>
+      <pre><code>X-API-Key: trv_live_&lt;your-key&gt;</code></pre>
+
+      <h2>Reserve a verification call</h2>
+      <div class="card">
+        <span class="method">POST</span><span class="path">/v1/tenant/verification-calls/reserve</span>
+        <pre><code>{
+  "verificationType": "nin",
+  "subjectRef": "hashed-subject-reference",
+  "idempotencyKey": "outlet-request-123"
+}</code></pre>
+        <p>The request is charged against the outlet wallet. Reusing an idempotency key returns the original reservation instead of charging twice.</p>
+      </div>
+
+      <h2>Manage keys</h2>
+      <div class="card"><span class="method">GET</span><span class="path">/v1/tenant/api-keys</span><p>List the agency's outlet keys. Secret values are never returned.</p></div>
+      <div class="card"><span class="method">POST</span><span class="path">/v1/tenant/api-keys/outlets/{outletId}</span><p>Generate a key. The response contains <code>rawKey</code> once; store it securely immediately.</p><pre><code>{ "description": "Lagos outlet production integration" }</code></pre></div>
+      <div class="card"><span class="method">DELETE</span><span class="path">/v1/tenant/api-keys/{id}</span><p>Revoke an outlet key. Revoked keys stop authenticating immediately.</p></div>
+
+      <h2>Platform administration</h2>
+      <p>Platform administrators can create an organization-scoped or outlet-scoped key through <code>POST /v1/admin/api-keys/tenants</code>. This endpoint is restricted to the platform admin policy.</p>
+    </main>
+  </body>
+</html>
