@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.WebUtilities;
 using TruvoID.Core.Interfaces;
 using TruvoID.Domain.Enums;
 using TruvoID.Infrastructure.Postgres;
+using TruvoID.Infrastructure.Services;
 
 namespace TruvoID.API.Endpoints;
 
@@ -26,6 +27,8 @@ public static class AgencyInvitationEndpoints
         InviteAgencyRequest request,
         ControlPlaneIdentityStore identities,
         IAuditService audit,
+        IEmailService email,
+        ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         try
@@ -42,6 +45,15 @@ public static class AgencyInvitationEndpoints
                 ct);
             await audit.LogAsync(AuditAction.Created, "AgencyInvitation", invitation.InvitationId,
                 ctx.GetUserId(), "User", request.AgencyName, ct);
+            var inviteUrl = $"https://gettruvoid.com/accept-agency-invite?token={rawToken}";
+            try
+            {
+                await email.SendAsync(request.AdminEmail, request.AdminFullName, $"You're invited to administer {request.AgencyName} on TruvoID", EmailTemplates.StaffInvitation(request.AgencyName, "TruvoID Platform", "Agency administrator", inviteUrl));
+            }
+            catch (Exception ex)
+            {
+                loggerFactory.CreateLogger(nameof(AgencyInvitationEndpoints)).LogError(ex, "Agency invitation email could not be sent to {Email}", request.AdminEmail);
+            }
 
             return Results.Ok(new
             {

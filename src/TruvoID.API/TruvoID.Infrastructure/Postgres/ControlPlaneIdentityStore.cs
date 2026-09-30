@@ -15,6 +15,8 @@ public sealed record ControlPlaneUser(
 
 public sealed record RegisteredIdentity(Guid UserId, Guid OrganizationId);
 public sealed record AgencyInvitation(Guid InvitationId, Guid OrganizationId, Guid UserId);
+public sealed record TeamMember(Guid Id, string Email, string? FullName, string Role, string Status, Guid? OutletId, DateTime CreatedAt, DateTime? LastLoginAt);
+public sealed record UserInvitation(Guid InvitationId, Guid OrganizationId, Guid UserId);
 
 /// <summary>
 /// Central identity access. Authentication must resolve the Organization before
@@ -142,6 +144,115 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
 
         await tx.CommitAsync(ct);
         return await FindByIdAsync(userId, ct);
+    }
+
+    public async Task<IReadOnlyList<TeamMember>> ListTeamAsync(Guid organizationId, CancellationToken ct = default)
+    {
+        await using var command = controlPlane.CreateCommand("""
+            SELECT id, email, full_name, role, status, outlet_id, created_at, last_login_at
+            FROM control.app_user
+            WHERE organization_id = @organizationId
+            ORDER BY created_at
+            """);
+        command.Parameters.AddWithValue("organizationId", organizationId);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var members = new List<TeamMember>();
+        while (await reader.ReadAsync(ct))
+            members.Add(new TeamMember(reader.GetGuid(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetGuid(5), reader.GetFieldValue<DateTime>(6), reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTime>(7)));
+        return members;
+    }
+
+    public async Task<UserInvitation> InviteUserAsync(
+        Guid organizationId,
+        string email,
+        string fullName,
+        string role,
+        Guid? outletId,
+        Guid createdByUserId,
+        string tokenHash,
+        DateTime expiresAt,
+        CancellationToken ct = default)
+    {
+        var userId = Guid.NewGuid();
+        var invitationId = Guid.NewGuid();
+        await using var conn = await controlPlane.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using (var user = new NpgsqlCommand("""
+            INSERT INTO control.app_user (id, email, full_name, credential_hash, organization_id, outlet_id, role, status)
+            VALUES (@id, @email, @fullName, @credentialHash, @organizationId, @outletId, @role, 'invited')
+            """, conn, tx))
+        {
+            user.Parameters.AddWithValue("id", userId);
+            user.Parameters.AddWithValue("email", email.Trim().ToLowerInvariant());
+            user.Parameters.AddWithValue("fullName", fullName.Trim());
+            user.Parameters.AddWithValue("credentialHash", PasswordHasher.Hash(Guid.NewGuid().ToString("N")));
+            user.Parameters.AddWithValue("organizationId", organizationId);
+            user.Parameters.AddWithValue("outletId", (object?)outletId ?? DBNull.Value);
+            user.Parameters.AddWithValue("role", role);
+            await user.ExecuteNonQueryAsync(ct);
+        }
+        await using (var invitation = new NpgsqlCommand("""
+            INSERT INTO control.user_invitation (id, organization_id, user_id, token_hash, expires_at, created_by_user_id)
+            VALUES (@id, @organizationId, @userId, @tokenHash, @expiresAt, @createdBy)
+            """, conn, tx))
+        {
+            invitation.Parameters.AddWithValue("id", invitationId);
+            invitation.Parameters.AddWithValue("organizationId", organizationId);
+            invitation.Parameters.AddWithValue("userId", userId);
+            invitation.Parameters.AddWithValue("tokenHash", tokenHash);
+            invitation.Parameters.AddWithValue("expiresAt", expiresAt);
+            invitation.Parameters.AddWithValue("createdBy", createdByUserId);
+            await invitation.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+        return new UserInvitation(invitationId, organizationId, userId);
+    }
+
+    public async Task<ControlPlaneUser?> AcceptUserInvitationAsync(string tokenHash, string password, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
+            throw new ArgumentException("Password must be at least 8 characters.");
+        await using var conn = await controlPlane.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        Guid userId;
+        await using (var find = new NpgsqlCommand("SELECT user_id FROM control.user_invitation WHERE token_hash = @tokenHash AND accepted_at IS NULL AND expires_at > now() FOR UPDATE", conn, tx))
+        {
+            find.Parameters.AddWithValue("tokenHash", tokenHash);
+            var value = await find.ExecuteScalarAsync(ct);
+            if (value is not Guid found) return null;
+            userId = found;
+        }
+        await using (var user = new NpgsqlCommand("UPDATE control.app_user SET credential_hash = @credentialHash, status = 'active', updated_at = now() WHERE id = @id", conn, tx))
+        {
+            user.Parameters.AddWithValue("credentialHash", PasswordHasher.Hash(password));
+            user.Parameters.AddWithValue("id", userId);
+            if (await user.ExecuteNonQueryAsync(ct) != 1) return null;
+        }
+        await using (var accepted = new NpgsqlCommand("UPDATE control.user_invitation SET accepted_at = now() WHERE token_hash = @tokenHash", conn, tx))
+        {
+            accepted.Parameters.AddWithValue("tokenHash", tokenHash);
+            await accepted.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+        return await FindByIdAsync(userId, ct);
+    }
+
+    public async Task<bool> SetUserStatusAsync(Guid organizationId, Guid userId, string status, CancellationToken ct = default)
+    {
+        await using var command = controlPlane.CreateCommand("UPDATE control.app_user SET status = @status, updated_at = now() WHERE id = @userId AND organization_id = @organizationId");
+        command.Parameters.AddWithValue("status", status);
+        command.Parameters.AddWithValue("userId", userId);
+        command.Parameters.AddWithValue("organizationId", organizationId);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<bool> SetUserRoleAsync(Guid organizationId, Guid userId, string role, CancellationToken ct = default)
+    {
+        await using var command = controlPlane.CreateCommand("UPDATE control.app_user SET role = @role, updated_at = now() WHERE id = @userId AND organization_id = @organizationId");
+        command.Parameters.AddWithValue("role", role);
+        command.Parameters.AddWithValue("userId", userId);
+        command.Parameters.AddWithValue("organizationId", organizationId);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
     }
 
     public async Task<RegisteredIdentity> RegisterOrganizationAsync(

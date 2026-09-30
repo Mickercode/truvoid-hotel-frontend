@@ -45,7 +45,6 @@
     <Compile Remove="TruvoID.Domain/Entities/**/*.cs" />
     <Compile Remove="TruvoID.Infrastructure/Data/**/*.cs" />
     <Compile Remove="TruvoID.Infrastructure/Extensions/**/*.cs" />
-    <Compile Remove="TruvoID.Infrastructure/Services/**/*.cs" />
     <Compile Remove="TruvoID.Core/Interfaces/INimcConfigService.cs" />
   </ItemGroup>
 

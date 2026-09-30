@@ -1,0 +1,12 @@
+.git
+.gitignore
+.vs
+.idea
+**/bin
+**/obj
+web/node_modules
+web/dist
+deploy/local
+tests
+*.user
+*.suo

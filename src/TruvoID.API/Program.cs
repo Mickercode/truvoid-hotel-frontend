@@ -7,6 +7,7 @@ using System.Text;
 using TruvoID.API.Endpoints;
 using TruvoID.Core.Interfaces;
 using TruvoID.Infrastructure.Postgres;
+using TruvoID.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -57,6 +58,7 @@ var postgresConnectionString = builder.Configuration.GetConnectionString("Postgr
 builder.Services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(postgresConnectionString));
 builder.Services.AddSingleton<PostgresApiKeyStore>();
 builder.Services.AddSingleton<OrganizationSetupStore>();
+builder.Services.AddSingleton<OrganizationBrandingStore>();
 builder.Services.AddSingleton(CreateTenantCredentialProtector(builder.Configuration));
 builder.Services.AddSingleton<TenantConnectionFactory>(sp => new TenantConnectionFactory(
     sp.GetRequiredService<NpgsqlDataSource>(),
@@ -65,6 +67,21 @@ builder.Services.AddSingleton<TenantConnectionFactory>(sp => new TenantConnectio
 builder.Services.AddScoped<ControlPlaneIdentityStore>();
 builder.Services.AddScoped<TenantWalletService>();
 builder.Services.AddScoped<TenantVerificationService>();
+var resendApiKey = builder.Configuration["Resend:ApiKey"] ?? Environment.GetEnvironmentVariable("RESEND_API_KEY");
+builder.Services.AddHttpClient("resend", client =>
+{
+    if (!string.IsNullOrWhiteSpace(resendApiKey))
+        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {resendApiKey}");
+});
+builder.Services.AddScoped<IEmailService, ResendEmailService>();
+var flutterwaveSecretKey = builder.Configuration["Flutterwave:SecretKey"] ?? Environment.GetEnvironmentVariable("FLUTTERWAVE_SECRET_KEY");
+builder.Services.AddHttpClient("flutterwave", client =>
+{
+    client.BaseAddress = new Uri("https://api.flutterwave.com/");
+    if (!string.IsNullOrWhiteSpace(flutterwaveSecretKey))
+        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {flutterwaveSecretKey}");
+});
+builder.Services.AddScoped<FlutterwavePaymentService>();
 
 // ── JWT auth ──────────────────────────────────────────────────────────────
 // Railway sets Jwt__SecretKey / Jwt__Issuer / Jwt__Audience (maps to Jwt:SecretKey
@@ -154,6 +171,7 @@ app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
 app.MapTruvoIdEndpoints();
 
 app.Run();

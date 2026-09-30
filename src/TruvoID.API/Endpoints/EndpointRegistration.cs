@@ -8,12 +8,17 @@ public static class EndpointRegistration
     {
         app.MapAuthEndpoints();
         app.MapAgencyInvitationEndpoints();
+        app.MapAdminOrganizationEndpoints();
         app.MapOrganizationSetupEndpoints();
+        app.MapOrganizationBrandingEndpoints();
         app.MapAdminDashboardEndpoints();
         app.MapApiKeyEndpoints();
         app.MapTenantEndpoints();
         app.MapTenantWalletEndpoints();
+        app.MapFlutterwavePaymentEndpoints();
         app.MapTenantVerificationEndpoints();
+        app.MapTenantVerificationHistoryEndpoints();
+        app.MapTenantTeamEndpoints();
 
         return app;
     }

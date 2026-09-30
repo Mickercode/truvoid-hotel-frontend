@@ -212,7 +212,8 @@ public static class AuthEndpoints
             Email = user.Email,
             FullName = user.FullName ?? string.Empty,
             Role = ToLegacyClaimRole(user.Role),
-            InstitutionName = user.OrganizationName
+            InstitutionName = user.OrganizationName,
+            OutletId = user.OutletId?.ToString()
         });
     }
 
@@ -387,4 +388,5 @@ public record AuthProfileResponse
     public string? FullName { get; init; }
     public string Role { get; init; } = "";
     public string InstitutionName { get; init; } = "";
+    public string? OutletId { get; init; }
 }

@@ -10,6 +10,14 @@ dotnet run --project src/TruvoID.API -- migrate
 # Keep this key stable — it encrypts each Organization's DB password (openssl rand -base64 32).
 $env:Postgres__TenantCredentialKey = "<base64 32-byte key>"
 dotnet run --project src/TruvoID.API -- provision-tenants
+
+# Deliver tenant credit-sale/outlet-resale events to the central revenue ledger.
+dotnet run --project src/TruvoID.API -- relay-revenue
+
+# Runtime API credentials use the DML-only role and the same credential key.
+$env:ConnectionStrings__Postgres = "Host=localhost;Port=5433;Database=truvoid;Username=truvo_app;Password=truvo_app_dev"
+$env:Postgres__TenantCredentialKey = "<same base64 32-byte key>"
+dotnet run --project src/TruvoID.API
 ```
 
 Each Institution/Agency gets its own schema (`org_<id>`) and login role
