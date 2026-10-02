@@ -31,6 +31,7 @@
     <Compile Include="..\..\src\TruvoID.API\TruvoID.Core\Interfaces\IAuditService.cs" Link="Interfaces\IAuditService.cs" />
     <Compile Include="..\..\src\TruvoID.API\TruvoID.Infrastructure\Postgres\*.cs" Link="Postgres\%(Filename)%(Extension)" />
     <Compile Include="..\..\src\TruvoID.API\Endpoints\AuthValidation.cs" Link="Endpoints\AuthValidation.cs" />
+    <Compile Include="..\..\src\TruvoID.API\TruvoID.Infrastructure\Identity\*.cs" Link="Identity\%(Filename)%(Extension)" />
     <EmbeddedResource Include="..\..\src\TruvoID.API\TruvoID.Infrastructure\Postgres\Migrations\ControlPlane\*.sql" LogicalName="ControlPlane.%(Filename)%(Extension)" />
     <EmbeddedResource Include="..\..\src\TruvoID.API\TruvoID.Infrastructure\Postgres\Migrations\Tenant\*.sql" LogicalName="Tenant.%(Filename)%(Extension)" />
     <!-- The real local role bootstrap, so the tests exercise the same role setup devs run -->

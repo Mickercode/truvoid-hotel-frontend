@@ -31,7 +31,8 @@ public static class TenantVerificationHistoryEndpoints
         if (!string.IsNullOrWhiteSpace(type)) filters.Add("verification_type = @type");
         var where = filters.Count == 0 ? "" : $"WHERE {string.Join(" AND ", filters)}";
         await using var command = session.CreateCommand($"""
-            SELECT id, verification_type, status, subject_ref, ledger_entry_id, created_at, completed_at
+            SELECT id, verification_type, status, subject_ref, ledger_entry_id, created_at, completed_at,
+                   result->>'verdict', result->'identity'->>'fullName', result->>'environment'
             FROM verification_call
             {where}
             ORDER BY created_at DESC
@@ -44,9 +45,11 @@ public static class TenantVerificationHistoryEndpoints
         await using var reader = await command.ExecuteReaderAsync(ct);
         var calls = new List<VerificationHistoryItem>();
         while (await reader.ReadAsync(ct))
-            calls.Add(new VerificationHistoryItem(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)[..Math.Min(12, reader.GetString(3).Length)], reader.GetGuid(4), reader.GetFieldValue<DateTime>(5), reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTime>(6)));
+            calls.Add(new VerificationHistoryItem(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)[..Math.Min(12, reader.GetString(3).Length)], reader.GetGuid(4), reader.GetFieldValue<DateTime>(5), reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTime>(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetString(9)));
         return Results.Ok(new { page, pageSize, items = calls });
     }
 
-    private sealed record VerificationHistoryItem(Guid Id, string VerificationType, string Status, string SubjectPreview, Guid LedgerEntryId, DateTime CreatedAt, DateTime? CompletedAt);
+    private sealed record VerificationHistoryItem(Guid Id, string VerificationType, string Status, string SubjectPreview, Guid LedgerEntryId, DateTime CreatedAt, DateTime? CompletedAt,
+        string? Verdict, string? FullName, string? Environment);
 }

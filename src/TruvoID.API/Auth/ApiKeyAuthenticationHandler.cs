@@ -47,7 +47,9 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
 
         if (key is null)
             return AuthenticateResult.Fail("Invalid API key.");
-        if (key.Status != "Active")
+        // control.api_key stores lowercase ('active' | 'revoked'); a case-sensitive
+        // "Active" check here once rejected every valid key as revoked.
+        if (!string.Equals(key.Status, "active", StringComparison.OrdinalIgnoreCase))
             return AuthenticateResult.Fail("This API key has been revoked.");
 
         // Fire-and-forget usage tracking — don't block the request on it.

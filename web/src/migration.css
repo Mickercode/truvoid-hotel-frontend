@@ -210,3 +210,37 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .progress-footer { display: grid; gap: 14px; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 1.6s; } .auth-progress { animation: none; } .auth-step, .step-icon, .strength-bars span { transition: none; } }
+
+/* ── Verification results & sandbox ──────────────────────────────────────── */
+.env-badge { display: inline-block; margin-left: 10px; padding: 3px 7px; border: 1px solid #8a6d2b; color: #f1ce70; background: #221c0e; font: 10px 'DM Mono', monospace; letter-spacing: .1em; vertical-align: middle; }
+.env-badge.small { margin-left: 8px; padding: 2px 5px; font-size: 9px; }
+.segmented { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); }
+.segmented button { padding: 11px 8px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; font: 12px 'DM Mono', monospace; letter-spacing: .04em; }
+.segmented button:last-child { border-right: 0; }
+.segmented button.active { background: #122421; color: var(--cyan); box-shadow: inset 0 -2px 0 var(--cyan); }
+.sandbox-help { margin-top: 4px; padding: 16px; border: 1px dashed #8a6d2b; background: #17140c; }
+.sandbox-help p { margin: 8px 0 12px; color: var(--muted); font-size: 12px; }
+.sandbox-help dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-size: 12px; }
+.sandbox-help dt { color: var(--muted); }
+.sandbox-help dd { margin: 0; }
+.sandbox-help .link-button { padding: 0; font: 12px 'DM Mono', monospace; }
+.result-head { display: flex; align-items: center; gap: 4px; margin-bottom: 18px; }
+.result-identity { display: flex; gap: 20px; align-items: center; margin-bottom: 22px; }
+.result-identity h2 { margin: 0 0 6px; font-size: 26px; letter-spacing: -.03em; }
+.id-photo { width: 92px; height: 115px; object-fit: cover; border: 1px solid #36504d; background: #0d1118; }
+.result-meta { padding-top: 18px; border-top: 1px solid var(--line); }
+.refund-note { color: var(--lime); font-weight: 400; }
+.verdict-failed { border-color: #76484d; background: linear-gradient(110deg, #1f1416, #11151d); }
+.verdict-pending { border-color: #6b5d36; background: linear-gradient(110deg, #1c1a12, #11151d); }
+.result-loading { display: grid; gap: 14px; align-content: start; }
+.skeleton { background: linear-gradient(90deg, #161c25, #1f2731, #161c25); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
+.skeleton.photo { width: 92px; height: 115px; }
+.skeleton.line { height: 18px; width: 70%; }
+.skeleton.line.short { width: 40%; }
+.muted { color: var(--muted); }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+/* FormField outside the auth pages (e.g. Verify) matches the app's .field inputs */
+.form-card .auth-field input { width: 100%; padding: 13px 14px; border: 1px solid var(--line); outline: 0; background: #0d1118; color: #eef2f8; font: 15px 'DM Mono', monospace; letter-spacing: .04em; }
+.form-card .auth-field input:focus { border-color: var(--cyan); }
+.form-card .auth-field.invalid input { border-color: #a44f4f; background: #1a1214; }

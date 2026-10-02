@@ -12,6 +12,14 @@ public sealed record VerificationReservation(
     long BalanceAfterKobo,
     string VerificationType);
 
+public sealed record StoredVerification(
+    Guid CallId,
+    string VerificationType,
+    string Status,
+    string? ResultJson,
+    long AmountKobo,
+    DateTime CreatedAt);
+
 /// <summary>
 /// Reserves a verification in one tenant transaction: wallet debit, ledger entry,
 /// and pending call record either commit together or all roll back.
@@ -54,8 +62,8 @@ public sealed class TenantVerificationService(
             """);
         command.Parameters.AddWithValue("id", callId);
         command.Parameters.AddWithValue("outletId", (object?)session.Scope.OutletId ?? DBNull.Value);
-        command.Parameters.AddWithValue("userId", (object?)userId ?? DBNull.Value);
-        command.Parameters.AddWithValue("apiKeyId", (object?)apiKeyId ?? DBNull.Value);
+        command.Parameters.Add("userId", NpgsqlDbType.Uuid).Value = (object?)userId ?? DBNull.Value; // typed: a bare NULL is ambiguous to Postgres
+        command.Parameters.Add("apiKeyId", NpgsqlDbType.Uuid).Value = (object?)apiKeyId ?? DBNull.Value;
         command.Parameters.AddWithValue("type", verificationType.Trim().ToLowerInvariant());
         command.Parameters.AddWithValue("subjectRef", HashSubject(subjectRef));
         command.Parameters.AddWithValue("ledgerId", debit.LedgerEntryId);
@@ -66,7 +74,11 @@ public sealed class TenantVerificationService(
             debit.BalanceAfterKobo, verificationType.Trim().ToLowerInvariant());
     }
 
-    public async Task CompleteAsync(
+    /// <summary>
+    /// Records the provider's answer. A failed call is refunded in the same transaction;
+    /// returns the wallet balance after that refund, or null when nothing was refunded.
+    /// </summary>
+    public async Task<long?> CompleteAsync(
         TenantSession session,
         Guid callId,
         bool succeeded,
@@ -90,13 +102,14 @@ public sealed class TenantVerificationService(
         if (status != "pending")
             throw new InvalidOperationException("Verification call has already been completed.");
 
+        long? refundedBalance = null;
         if (!succeeded)
         {
             await using var amountCommand = session.CreateCommand(
                 "SELECT amount_kobo FROM wallet_ledger_entry WHERE id = @id");
             amountCommand.Parameters.AddWithValue("id", ledgerId);
             var amount = Convert.ToInt64(await amountCommand.ExecuteScalarAsync(ct));
-            await wallets.RefundAsync(session, amount, session.Scope.OutletId, callId.ToString(), ct);
+            refundedBalance = (await wallets.RefundAsync(session, amount, session.Scope.OutletId, callId.ToString(), ct)).BalanceAfterKobo;
         }
 
         await using var update = session.CreateCommand("""
@@ -108,6 +121,33 @@ public sealed class TenantVerificationService(
         update.Parameters.AddWithValue("status", succeeded ? "succeeded" : "failed");
         update.Parameters.Add("result", NpgsqlDbType.Jsonb).Value = (object?)resultJson ?? DBNull.Value;
         await update.ExecuteNonQueryAsync(ct);
+        return refundedBalance;
+    }
+
+    /// <summary>
+    /// Looks up an earlier call by idempotency key (same caller only) so a retried
+    /// request returns the original answer instead of charging twice.
+    /// </summary>
+    public async Task<StoredVerification?> FindByIdempotencyKeyAsync(
+        TenantSession session, string idempotencyKey, Guid? userId, Guid? apiKeyId, CancellationToken ct = default)
+    {
+        await using var command = session.CreateCommand("""
+            SELECT c.id, c.verification_type, c.status, c.result::text, l.amount_kobo, c.created_at
+            FROM verification_call c
+            JOIN wallet_ledger_entry l ON l.id = c.ledger_entry_id
+            WHERE c.idempotency_key = @key
+              AND ((@userId IS NOT NULL AND c.user_id = @userId)
+                OR (@apiKeyId IS NOT NULL AND c.api_key_id = @apiKeyId))
+            LIMIT 1
+            """);
+        command.Parameters.AddWithValue("key", idempotencyKey);
+        command.Parameters.Add("userId", NpgsqlDbType.Uuid).Value = (object?)userId ?? DBNull.Value; // typed: a bare NULL is ambiguous to Postgres
+        command.Parameters.Add("apiKeyId", NpgsqlDbType.Uuid).Value = (object?)apiKeyId ?? DBNull.Value;
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct)
+            ? new StoredVerification(reader.GetGuid(0), reader.GetString(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt64(4), reader.GetDateTime(5))
+            : null;
     }
 
     private async Task<long> ResolvePriceAsync(Guid organizationId, string type, CancellationToken ct)
@@ -146,8 +186,8 @@ public sealed class TenantVerificationService(
             LIMIT 1
             """);
         command.Parameters.AddWithValue("key", idempotencyKey);
-        command.Parameters.AddWithValue("userId", (object?)userId ?? DBNull.Value);
-        command.Parameters.AddWithValue("apiKeyId", (object?)apiKeyId ?? DBNull.Value);
+        command.Parameters.Add("userId", NpgsqlDbType.Uuid).Value = (object?)userId ?? DBNull.Value; // typed: a bare NULL is ambiguous to Postgres
+        command.Parameters.Add("apiKeyId", NpgsqlDbType.Uuid).Value = (object?)apiKeyId ?? DBNull.Value;
         await using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct)
             ? new VerificationReservation(reader.GetGuid(0), reader.GetGuid(1), reader.GetInt64(2), reader.GetInt64(3), reader.GetString(4))

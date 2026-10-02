@@ -11,7 +11,8 @@ export type AuthProfile = {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  /** body is the parsed JSON error response, when there was one. */
+  constructor(message: string, readonly status: number, readonly body: unknown = null) {
     super(message)
   }
 }
@@ -74,7 +75,7 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
 
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: string; message?: string } | null
-    throw new ApiError(body?.error ?? body?.message ?? fallbackMessage(response.status), response.status)
+    throw new ApiError(body?.error ?? body?.message ?? fallbackMessage(response.status), response.status, body)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>

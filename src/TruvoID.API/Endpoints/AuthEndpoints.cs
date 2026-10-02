@@ -283,7 +283,7 @@ public static class AuthEndpoints
             new Claim("tenant_role", tenantRole ?? role),
             new Claim(ClaimTypes.Role, role),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now, DateTimeOffset.Now.Offset).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
+            new Claim(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString() /* now is UTC; pairing it with the local offset throws off-UTC hosts */, ClaimValueTypes.Integer64)
         };
 
         if (outletId.HasValue)

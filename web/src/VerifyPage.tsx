@@ -1,43 +1,147 @@
-import { FormEvent, useState } from 'react'
-import { api } from './api'
+import { FormEvent, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { api, ApiError } from './api'
+import { FormField, SubmitButton } from './AuthFlow'
 import { VerificationHistoryPage } from './VerificationHistoryPage'
 
-type Result = Record<string, unknown>
+type VerifyType = 'nin' | 'bvn' | 'phone'
+type Identity = {
+  fullName?: string | null; dateOfBirth?: string | null; gender?: string | null; phone?: string | null
+  stateOfOrigin?: string | null; residentialAddress?: string | null; photo?: string | null
+}
+type Outcome = {
+  id: string; type: VerifyType; environment: 'live' | 'sandbox'
+  status: 'match' | 'no_match' | 'provider_error' | 'pending'
+  message?: string | null; identity?: Identity | null
+  charge: { amountKobo: number; refunded: boolean }; balanceAfterKobo?: number | null; createdAt: string
+}
+type TestNumbers = Record<VerifyType, { match: string; noMatch: string; providerError: string }>
+
+const LABELS: Record<VerifyType, string> = { nin: 'NIN', bvn: 'BVN', phone: 'Phone number' }
+const naira = (kobo: number) => `₦${(kobo / 100).toLocaleString('en-NG', { minimumFractionDigits: 2 })}`
+
+// Mirrors IdentitySubject.Normalize on the server.
+function validateNumber(type: VerifyType, raw: string): string | null {
+  const value = raw.replace(/[\s\-()]/g, '')
+  if (type === 'phone') {
+    const local = value.startsWith('+234') ? '0' + value.slice(4) : value.startsWith('234') && value.length === 13 ? '0' + value.slice(3) : value
+    return /^0[789][01]\d{8}$/.test(local) ? null : 'Enter a Nigerian mobile number, e.g. 08031234567.'
+  }
+  return /^\d{11}$/.test(value) ? null : `A ${LABELS[type]} must be exactly 11 digits.`
+}
 
 export function VerifyPage() {
-  const [type, setType] = useState('nin')
-  const [subject, setSubject] = useState('')
-  const [result, setResult] = useState<Result | null>(null)
-  const [message, setMessage] = useState('')
+  const [type, setType] = useState<VerifyType>('nin')
+  const [number, setNumber] = useState('')
+  const [fieldError, setFieldError] = useState<string | null>(null)
+  const [outcome, setOutcome] = useState<Outcome | null>(null)
+  const [error, setError] = useState<{ message: string; walletLink?: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [testNumbers, setTestNumbers] = useState<TestNumbers | null>(null)
+  const [historyKey, setHistoryKey] = useState(0)
+
+  useEffect(() => {
+    // Only the sandbox serves test numbers; a 404 simply means "live".
+    api.get<TestNumbers>('/v1/verify/test-numbers').then(setTestNumbers).catch(() => setTestNumbers(null))
+  }, [])
 
   async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setMessage(''); setResult(null)
+    event.preventDefault()
+    const invalid = validateNumber(type, number)
+    setFieldError(invalid)
+    if (invalid) return
+    setBusy(true); setError(null); setOutcome(null)
     try {
-      setResult(await api.post<Result>('/v1/tenant/verification-calls/reserve', {
-        verificationType: type,
-        subjectRef: subject,
-        idempotencyKey: `web-${crypto.randomUUID()}`,
-      }))
-      setMessage('Verification call reserved successfully.')
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Verification could not be reserved.')
-    } finally { setBusy(false) }
+      setOutcome(await api.post<Outcome>(`/v1/verify/${type}`, { number, idempotencyKey: `web-${crypto.randomUUID()}` }))
+    } catch (reason) {
+      // 502 = the provider failed; the body is a full outcome (status provider_error, refunded) worth showing.
+      const failed = reason instanceof ApiError && reason.status === 502 ? reason.body as Outcome | null : null
+      if (failed?.status === 'provider_error') { setOutcome(failed); return }
+      const status = reason instanceof ApiError ? reason.status : 0
+      setError({ message: reason instanceof Error ? reason.message : 'Verification could not be completed.', walletLink: status === 402 })
+    } finally {
+      setBusy(false)
+      setHistoryKey((k) => k + 1)
+    }
   }
 
   return <section>
-    <div className="page-title"><div className="eyebrow">VERIFICATION WORKSPACE</div><h1>Run a verification.</h1><p className="lede">Reserve a verification call from your organization or outlet wallet with an auditable request.</p></div>
+    <div className="page-title">
+      <div className="eyebrow">VERIFICATION WORKSPACE {testNumbers && <span className="env-badge">SANDBOX</span>}</div>
+      <h1>Run a verification.</h1>
+      <p className="lede">Check a NIN, BVN or phone number against the national registry. Each completed check is charged to your wallet; provider errors are refunded automatically.</p>
+    </div>
     <div className="verify-layout">
       <div className="form-card">
-        <form onSubmit={submit}>
-          <label className="field"><span>Verification type</span><select value={type} onChange={event => { setType(event.target.value); setSubject('') }}><option value="nin">NIN</option><option value="bvn">BVN</option><option value="phone">Phone number</option></select></label>
-          <label className="field"><span>{type === 'nin' ? 'NIN' : type === 'bvn' ? 'BVN' : 'Phone number'}</span><input required value={subject} onChange={event => setSubject(event.target.value)} placeholder={type === 'phone' ? '080...' : `Enter ${type.toUpperCase()}`} /></label>
-          <p className="stat-note">Use a hashed subject reference for production integrations. The reservation is charged against the active tenant scope.</p>
-          <button className="button button-primary" disabled={busy}>{busy ? 'Reserving...' : 'Reserve verification ↗'}</button>
+        <form onSubmit={submit} noValidate>
+          <div className="segmented" role="radiogroup" aria-label="Verification type">
+            {(Object.keys(LABELS) as VerifyType[]).map((t) => (
+              <button type="button" role="radio" aria-checked={type === t} key={t} className={type === t ? 'active' : ''}
+                onClick={() => { setType(t); setNumber(''); setFieldError(null); setOutcome(null); setError(null) }}>
+                {LABELS[t]}
+              </button>
+            ))}
+          </div>
+          <FormField label={LABELS[type]} inputMode="numeric" autoComplete="off" value={number} error={fieldError}
+            placeholder={type === 'phone' ? '08031234567' : '11-digit number'}
+            hint={type === 'phone' ? 'Local (080…) or international (+234…) format.' : undefined}
+            onChange={(e) => { setNumber(e.target.value); if (fieldError) setFieldError(null) }} />
+          <SubmitButton busy={busy} busyLabel="Checking the registry…">Verify {LABELS[type]} ↗</SubmitButton>
         </form>
-        {message && <div className={message.includes('successfully') ? 'notice success' : 'notice error'}>{message}</div>}
+        {error && <div className="notice error" role="alert">
+          {error.message} {error.walletLink && <Link className="text-link" to="/wallet">Fund wallet →</Link>}
+        </div>}
+        {testNumbers && <div className="sandbox-help">
+          <div className="eyebrow">SANDBOX TEST NUMBERS</div>
+          <p>No real lookups happen here. Use these to see each outcome:</p>
+          <dl>
+            <dt>Match</dt><dd><button type="button" className="link-button" onClick={() => setNumber(testNumbers[type].match)}>{testNumbers[type].match}</button></dd>
+            <dt>No match</dt><dd><button type="button" className="link-button" onClick={() => setNumber(testNumbers[type].noMatch)}>{testNumbers[type].noMatch}</button></dd>
+            <dt>Provider error</dt><dd><button type="button" className="link-button" onClick={() => setNumber(testNumbers[type].providerError)}>{testNumbers[type].providerError}</button></dd>
+          </dl>
+        </div>}
       </div>
-      {result && <div className="result-card"><div className="eyebrow">RESERVATION CONFIRMED</div><h2>{String(result.reference ?? result.verificationCallId ?? result.id ?? 'Verification reserved')}</h2><div className="result-grid"><div><span>TYPE</span><strong>{String(result.verificationType ?? type).toUpperCase()}</strong></div><div><span>WALLET AFTER</span><strong>{result.balanceAfterKobo ? `₦${Number(result.balanceAfterKobo) / 100}` : 'Recorded'}</strong></div><div><span>STATUS</span><strong>{String(result.status ?? 'reserved')}</strong></div></div><p className="stat-note">Keep the reservation reference when reconciling the verification result.</p></div>}
-    </div><div className="verify-history-embed"><VerificationHistoryPage /></div>
+
+      {busy && <div className="result-card result-loading" aria-hidden="true"><div className="skeleton photo" /><div className="skeleton line" /><div className="skeleton line short" /></div>}
+      {outcome && <ResultCard outcome={outcome} />}
+    </div>
+    <div className="verify-history-embed"><VerificationHistoryPage key={historyKey} /></div>
   </section>
+}
+
+function ResultCard({ outcome }: { outcome: Outcome }) {
+  const verdict = {
+    match: { label: 'MATCH FOUND', className: 'match', title: outcome.identity?.fullName ?? 'Identity confirmed' },
+    no_match: { label: 'NO MATCH', className: 'pending', title: 'No record matches this number' },
+    provider_error: { label: 'PROVIDER ERROR', className: 'failed', title: 'The check could not be completed' },
+    pending: { label: 'PROCESSING', className: 'pending', title: 'Still processing' },
+  }[outcome.status]
+  const id = outcome.identity
+  const rows: [string, string | null | undefined][] = id ? [
+    ['DATE OF BIRTH', id.dateOfBirth], ['GENDER', id.gender], ['PHONE', id.phone],
+    ['STATE OF ORIGIN', id.stateOfOrigin], ['ADDRESS', id.residentialAddress],
+  ] : []
+
+  return <div className={`result-card verdict-${verdict.className}`} role="status">
+    <div className="result-head">
+      <span className={`badge ${verdict.className}`}>{verdict.label}</span>
+      {outcome.environment === 'sandbox' && <span className="env-badge">SANDBOX</span>}
+    </div>
+    <div className="result-identity">
+      {id?.photo && <img className="id-photo" src={id.photo} alt={`Registry photo of ${id.fullName ?? 'the subject'}`} />}
+      <div>
+        <h2>{verdict.title}</h2>
+        {outcome.message && <p className="stat-note">{outcome.message}</p>}
+      </div>
+    </div>
+    {rows.length > 0 && <div className="result-grid">
+      {rows.filter(([, v]) => v).map(([k, v]) => <div key={k}><span>{k}</span><strong>{v}</strong></div>)}
+    </div>}
+    <div className="result-grid result-meta">
+      <div><span>CHARGE</span><strong>{naira(outcome.charge.amountKobo)}{outcome.charge.refunded && <span className="refund-note"> · refunded</span>}</strong></div>
+      <div><span>WALLET AFTER</span><strong>{outcome.balanceAfterKobo != null ? naira(outcome.balanceAfterKobo) : '—'}</strong></div>
+      <div><span>REFERENCE</span><strong><code>{outcome.id.slice(0, 13)}</code></strong></div>
+    </div>
+    {id?.photo && <p className="stat-note">The photo and address are shown once and are not stored in your history.</p>}
+  </div>
 }
