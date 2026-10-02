@@ -5,6 +5,7 @@ export type AuthProfile = {
   fullName: string | null
   role: string
   institutionName: string
+  outletId?: string | null
 }
 
 type Tokens = {
@@ -13,8 +14,8 @@ type Tokens = {
   expiresAt: string
 }
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '')
-  ?? 'http://localhost:5000'
+const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '')
+const API_BASE_URL = configuredApiBase ?? (import.meta.env.DEV ? 'http://localhost:5000' : window.location.origin)
 
 const ACCESS_TOKEN_KEY = 'truvoid_access_token'
 const REFRESH_TOKEN_KEY = 'truvoid_refresh_token'

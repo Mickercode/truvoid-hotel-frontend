@@ -1,187 +1,127 @@
-# TruvoID Development Handoff
+# TruvoID Handoff
 
-**Last updated:** 2026-09-28
-**Branch:** `master`
-**Repository state:** The PostgreSQL-only cutover is in progress and the current feature work is uncommitted in the working tree.
+## Current State
 
-## Current Position
+The repository contains two frontend surfaces:
 
-TruvoID is in the middle of a multitenant PostgreSQL transition.
+- Hosted Blazor app in `Components/`.
+- React migration app in `web/`.
 
-Completed and validated:
+The hosted Blazor app remains the primary .NET-hosted experience. The React app builds separately with Vite.
 
-- PostgreSQL control-plane schema and migrator.
-- Per-organization PostgreSQL schemas and login roles.
-- Row-level security for organization and outlet isolation.
-- PostgreSQL-backed tenant identity and password hashing.
-- Tenant outlet, wallet, verification reservation, and revenue outbox APIs.
-- PostgreSQL-backed API-key metadata and authentication.
-- React/Vite frontend build.
-- Local PostgreSQL migration and provisioning flow.
+## Completed Work
 
-The legacy MongoDB application surface has been retired. The deployed API target is PostgreSQL-only, and the API project no longer references the MongoDB driver or MongoDB data layer.
+### React frontend
 
-## Recent API-Key Work
+- Added mobile marketing navigation.
+- Added mobile authenticated navigation.
+- Added keyboard-visible focus states.
+- Added retryable verification-history errors.
+- Added async loading and duplicate-submit protection to setup, team, and API-key flows.
+- Added production API fallback to the current origin instead of localhost.
+- Made the public contact form open a prefilled email to `contact@truvoid.com`.
+- Added reusable clipboard support in `web/src/CopyButton.tsx`.
+- Added copy controls for API keys and team invitation links.
+- Fixed team reactivation to call the backend `reactivate` action.
 
-API keys are stored in `control.api_key` in PostgreSQL. The raw secret is only returned once at creation time. Only the key prefix and SHA-256 hash are stored.
+### Invitation email delivery
 
-Agency endpoints:
+- Team invitations now send the existing branded `StaffInvitation` template.
+- Agency invitations now send the same branded invitation template with agency-specific content.
+- Email delivery failures are logged without preventing manual invitation-link fallback.
+- Resend configuration is registered in the API.
 
-- `GET /v1/tenant/api-keys`
-- `POST /v1/tenant/api-keys/outlets/{outletId}`
-- `DELETE /v1/tenant/api-keys/{id}`
+### Flutterwave payments
 
-Platform-admin endpoint:
+- Added hosted checkout initialization.
+- Added server-side Flutterwave transaction verification.
+- Added signed webhook validation.
+- Added idempotent wallet crediting.
+- Added a tenant `wallet_payment` table migration.
+- Added a Flutterwave checkout button to the hosted Blazor wallet top-up page.
+- Manual bank-transfer funding remains available.
 
-- `POST /v1/admin/api-keys/tenants`
-- `POST /v1/admin/agencies/invite`
+## Flutterwave Configuration
 
-Agency invitation acceptance:
+Set these environment variables in the API deployment:
 
-- `POST /v1/auth/agency-invitations/accept`
-
-Organization setup:
-
-- `GET /v1/tenant/setup`
-- `PUT /v1/tenant/setup/{section}`
-- `PUT /v1/tenant/setup/access-level`
-- `PUT /v1/tenant/setup/attestation`
-- `POST /v1/tenant/setup/documents`
-- `POST /v1/tenant/setup/submit`
-
-Platform-admin key revocation/listing:
-
-- `GET /v1/admin/api-keys`
-- `POST /v1/admin/api-keys/{id}/revoke`
-
-API-key authentication:
-
-```http
-X-API-Key: trv_live_<secret>
+```text
+FLUTTERWAVE_SECRET_KEY=<Flutterwave secret key>
+FLUTTERWAVE_WEBHOOK_HASH=<Flutterwave webhook secret hash>
 ```
 
-An outlet key receives `organization_id`, `outlet_id`, and `api_key_id` claims. Tenant verification requests accept either JWT or API key authentication:
+The configuration keys `Flutterwave:SecretKey` and `Flutterwave:WebhookHash` are also supported.
 
-- `POST /v1/tenant/verification-calls/reserve`
+Configure the Flutterwave webhook endpoint as:
 
-Documentation page built by the frontend:
-
-- `/api-docs.html`
-
-## PostgreSQL Migrations
-
-Migration locations:
-
-- `src/TruvoID.API/TruvoID.Infrastructure/Postgres/Migrations/ControlPlane/`
-- `src/TruvoID.API/TruvoID.Infrastructure/Postgres/Migrations/Tenant/`
-
-Important migrations:
-
-- `ControlPlane/0001_control_plane.sql`: organizations, users, API keys, pricing, audit, and central ledgers.
-- `ControlPlane/0002_tenant_credentials.sql`: encrypted per-organization database credentials.
-- `ControlPlane/0003_api_key_usage.sql`: API-key `call_count` metadata and runtime update grant.
-- `ControlPlane/0004_agency_invitations.sql`: PostgreSQL agency invitation tokens and acceptance state.
-- `ControlPlane/0005_organization_setup.sql`: progressive organization profile and supporting documents.
-- `Tenant/0001_tenant_core.sql`: tenant tables, wallets, outlets, verification calls, RLS, and append-only ledger rules.
-- `Tenant/0002_outbox_delivery.sql`: revenue outbox delivery state.
-
-Never edit an applied migration. Add the next numbered migration. The migrator verifies checksums and rejects modified applied scripts.
-
-## Local PostgreSQL Workflow
-
-Start PostgreSQL:
-
-```powershell
-docker compose -f deploy/local/docker-compose.yml up -d
+```text
+POST /v1/payments/flutterwave/webhook
 ```
 
-Run migrations:
+Use Flutterwave sandbox credentials first. Do not commit credentials to the repository.
+
+## Required Migration
+
+The new tenant migration is:
+
+```text
+src/TruvoID.API/TruvoID.Infrastructure/Postgres/Migrations/Tenant/0003_flutterwave_payments.sql
+```
+
+Run the existing migration command before testing payments:
 
 ```powershell
-$env:ConnectionStrings__PostgresMigrator = "Host=localhost;Port=5433;Database=truvoid;Username=truvo_migrator;Password=truvo_migrator_dev"
 dotnet run --project src/TruvoID.API -- migrate
 ```
 
-Provision pending organizations. Use one stable 32-byte base64 key for the environment:
+## Verification Commands
+
+React build:
 
 ```powershell
-$env:Postgres__TenantCredentialKey = "<base64 32-byte key>"
-dotnet run --project src/TruvoID.API -- provision-tenants
+cd web
+npm.cmd run build
 ```
 
-Relay tenant revenue events:
+API build:
 
 ```powershell
-dotnet run --project src/TruvoID.API -- relay-revenue
+cd src/TruvoID.API
+dotnet build --no-restore
 ```
 
-Run the API locally:
+Hosted Blazor build:
 
 ```powershell
-$env:ConnectionStrings__Postgres = "Host=localhost;Port=5433;Database=truvoid;Username=truvo_app;Password=truvo_app_dev"
-$env:Postgres__TenantCredentialKey = "<same base64 32-byte key>"
-dotnet run --project src/TruvoID.API
+dotnet build --no-restore
 ```
 
-Reset the local database completely:
+All three builds passed during the last session. The root hosted app has one pre-existing nullable warning in `Components/Pages/ApiKeys.razor`.
 
-```powershell
-docker compose -f deploy/local/docker-compose.yml down -v
-```
+## Payment Flow
 
-## Required Deployment Configuration
+1. Authenticated user selects an amount of at least NGN 50,000.
+2. API creates a pending tenant `wallet_payment` row.
+3. API initializes Flutterwave checkout and returns the hosted payment URL.
+4. User completes payment on Flutterwave.
+5. Flutterwave webhook or authenticated verification confirms the transaction.
+6. The tenant wallet is credited once using the Flutterwave transaction reference.
+7. A revenue outbox event is written in the same tenant transaction.
 
-The API requires these outside Development:
+## Important Notes
 
-- `ConnectionStrings__Postgres`: runtime DML-only PostgreSQL connection using `truvo_app` or equivalent.
-- `ConnectionStrings__PostgresMigrator`: only for migration/provisioning jobs using the migrator role.
-- `Postgres__TenantCredentialKey`: stable base64-encoded 32-byte AES key.
-- `Postgres__TenantCredentialKeyId`: optional key identifier; defaults to `k1`.
-- `Jwt__SecretKey` or `JWT_SECRET`.
-- `Jwt__Issuer` and `Jwt__Audience` if non-default values are used.
-- `Cors__Origins__0`: deployed frontend origin.
-- `RESEND_API_KEY` if notification email is enabled.
+- The checkout initialization currently accepts the redirect URL from the client. Before production, restrict it to an allowlisted application URL.
+- Payment testing requires a provisioned active tenant and the new migration applied to that tenant schema.
+- Webhook handling depends on the transaction reference format generated by the API: `trv_{organizationId}_{uniqueId}`.
+- The React wallet screen does not yet expose Flutterwave checkout; the hosted Blazor wallet page does.
+- Several React workspace screens still need explicit wallet, outlet, and admin API retry states.
 
-The frontend needs this build-time variable:
+## Recommended Next Steps
 
-- `VITE_API_BASE_URL`: deployed API base URL.
-
-## Verification Performed
-
-The following checks passed during this handoff:
-
-- `dotnet build TruvoID.sln --no-restore`
-- `dotnet build src/TruvoID.API/TruvoID.API.csproj --no-restore`
-- `dotnet test tests/TruvoID.Tests/TruvoID.Tests.csproj --no-restore`
-- Result: 129 passed, 0 failed. Legacy MongoDB-only tests were removed with the retired application surface.
-- `npm.cmd run build` from `web/`
-- Local PostgreSQL migration applied `ControlPlane/0003_api_key_usage.sql` successfully.
-- Local `control.api_key` table verified with `call_count` present.
-
-The test project emits two non-blocking `NU1510` package-pruning warnings for `Microsoft.Extensions.Configuration.Abstractions` and `Microsoft.Extensions.Http`.
-
-## Remaining Work
-
-Before production deployment:
-
-1. Review the full uncommitted diff.
-2. Add endpoint-level tests for PostgreSQL agency invitation creation and acceptance.
-3. Add production email delivery for agency invitation links; the current admin UI returns a copyable invitation link.
-4. Run the production migration job against the target PostgreSQL database.
-5. Provision all pending organizations and verify their tenant roles.
-6. Configure the required production environment variables.
-7. Smoke-test institution registration without outlets, keys, or wallet funding.
-8. Smoke-test agency invitation acceptance, outlet creation, outlet key generation, and `/v1/tenant/verification-calls/reserve`.
-9. Smoke-test the PostgreSQL-only deployment and then remove the old MongoDB Railway service.
-
-## Useful Files
-
-- `src/TruvoID.API/Program.cs`: service registration, startup validation, migration commands, authentication, CORS.
-- `src/TruvoID.API/Endpoints/ApiKeyEndpoints.cs`: tenant and legacy API-key routes.
-- `src/TruvoID.API/Endpoints/AdminDashboardEndpoints.cs`: platform-admin API-key routes.
-- `src/TruvoID.API/Auth/ApiKeyAuthenticationHandler.cs`: PostgreSQL API-key authentication.
-- `src/TruvoID.API/TruvoID.Infrastructure/Postgres/PostgresAuditService.cs`: PostgreSQL audit persistence.
-- `src/TruvoID.API/TruvoID.Infrastructure/Postgres/PostgresApiKeyStore.cs`: PostgreSQL API-key persistence.
-- `src/TruvoID.API/TruvoID.Infrastructure/Postgres/Migrations/ControlPlane/0003_api_key_usage.sql`: latest control-plane migration.
-- `web/api-docs.html`: agency API documentation.
-- `web/src/ApiKeysPage.tsx`: agency key-management page component.
+1. Run tenant migrations in a sandbox database.
+2. Configure Flutterwave sandbox keys and webhook hash.
+3. Test initialization, successful callback verification, duplicate webhook delivery, amount mismatch, and failed payment cases.
+4. Restrict redirect URLs and add a persisted payment status page.
+5. Add Flutterwave checkout to the React wallet screen if React becomes the primary frontend.
+6. Finish React wallet/outlet/admin error and retry states.
+7. Add automated endpoint tests for webhook signature validation and idempotent crediting.

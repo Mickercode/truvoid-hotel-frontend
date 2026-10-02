@@ -2,6 +2,7 @@
 @layout DashboardLayout
 @rendermode InteractiveServer
 @inject ApiClient Api
+@inject NavigationManager Navigation
 
 <AuthGuard />
 <PageTitle>Add Funds — TruvoID</PageTitle>
@@ -10,7 +11,7 @@
 
     <div class="mb-section-gap">
         <h1 class="font-headline-lg text-headline-lg text-deep-navy mb-2">Replenish Balance</h1>
-        <p class="font-body-md text-body-md text-slate-gray">Fund your wallet via bank transfer. No card or online payment required.</p>
+        <p class="font-body-md text-body-md text-slate-gray">Fund your wallet securely with Flutterwave or use a bank transfer for manual approval.</p>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
@@ -57,7 +58,7 @@
                 <section class="bg-paper-white p-8 rounded-lg border border-surface-variant shadow-[0_12px_32px_-4px_rgba(31,56,100,0.05)]">
                     <h3 class="font-label-sm text-label-sm text-deep-navy uppercase mb-6 tracking-widest">How to Replenish</h3>
                     <p class="font-body-sm text-body-sm text-slate-gray mb-6">
-                        Since we no longer use Paystack or Flutterwave, please follow the steps below to fund your wallet:
+                        Choose an online checkout for immediate payment, or follow the bank transfer steps below for manual approval:
                     </p>
 
                     <div class="space-y-5">
@@ -139,7 +140,7 @@
                                     <p class="font-body-sm text-body-sm text-slate-gray mb-3">
                                         Once you've sent the receipt, click the button below. Our admin team will verify the payment and credit your wallet. You'll receive an email notification once your account is credited.
                                     </p>
-                                    <button @onclick="HandleTopup" disabled="@(_isLoading || _amount < 50000)" class="w-full bg-warm-gold text-paper-white font-label-md text-label-md uppercase py-3 px-6 rounded hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50">
+                                     <button @onclick="HandleTopup" disabled="@(_isLoading || _amount < 50000)" class="w-full bg-warm-gold text-paper-white font-label-md text-label-md uppercase py-3 px-6 rounded hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50">
                                         @if (_isLoading)
                                         {
                                             <div class="w-4 h-4 border-2 border-paper-white border-t-transparent rounded-full animate-spin"></div>
@@ -150,6 +151,10 @@
                                             <span class="material-symbols-outlined text-[18px]">send</span>
                                             <span>I Have Sent the Money</span>
                                         }
+                                     </button>
+                                    <button @onclick="HandleFlutterwave" disabled="@(_isLoading || _amount < 50000)" class="w-full mt-3 border border-deep-navy text-deep-navy font-label-md text-label-md uppercase py-3 px-6 rounded hover:bg-surface-container-low transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
+                                        <span class="material-symbols-outlined text-[18px]">payments</span>
+                                        Pay securely with Flutterwave
                                     </button>
                                 </div>
                             </div>
@@ -195,6 +200,8 @@
     private bool _isLoading;
     private string? _errorMessage;
 
+    private sealed record FlutterwaveCheckoutResponse(string CheckoutUrl, string TransactionReference);
+
     private void SetAmount(decimal amount) => _amount = amount;
 
     private async Task HandleTopup()
@@ -225,6 +232,35 @@
         catch (Exception)
         {
             _errorMessage = "Unable to connect to payment service.";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task HandleFlutterwave()
+    {
+        if (_amount < 50000) return;
+        _isLoading = true;
+        _errorMessage = null;
+        try
+        {
+            var response = await Api.PostAsync<FlutterwaveCheckoutResponse>("/v1/tenant/wallet/topups/flutterwave/initialize", new
+            {
+                amountNaira = _amount,
+                redirectUrl = Navigation.Uri
+            });
+            if (string.IsNullOrWhiteSpace(response?.CheckoutUrl))
+            {
+                _errorMessage = "Flutterwave did not return a checkout link. Please try again.";
+                return;
+            }
+            Navigation.NavigateTo(response.CheckoutUrl, forceLoad: true);
+        }
+        catch
+        {
+            _errorMessage = "Unable to start Flutterwave checkout. Please try again or use bank transfer.";
         }
         finally
         {
