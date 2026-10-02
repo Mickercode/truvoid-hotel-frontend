@@ -15,7 +15,8 @@ public static class TenantWalletEndpoints
         group.MapGet("/ledger", GetLedger);
         app.MapPost("/v1/admin/tenant-wallets/{organizationId:guid}/credit", CreditOrganizationWallet)
             .RequireAuthorization("TruvoAdmin");
-        group.MapPost("/outlets/{outletId:guid}/purchase-credit", PurchaseOutletCredit);
+        // Agency → Outlet resale (build doc §2.2): only the Agency side may sell credit.
+        group.MapPost("/outlets/{outletId:guid}/purchase-credit", PurchaseOutletCredit).RequireAuthorization("TenantManager");
         group.MapPost("/sandbox-funds", AddSandboxFunds).RequireAuthorization("TenantManager");
         return app;
     }
@@ -130,6 +131,13 @@ public static class TenantWalletEndpoints
         TenantWalletService wallets,
         CancellationToken ct)
     {
+        // Outlet-scoped users (and Institution users, whose Outlets share one wallet) must never
+        // move Agency funds: this runs in Organization scope, so the check has to happen here.
+        if (ctx.GetOutletId() is not null || ctx.User.FindFirst("tenant_role")?.Value is not ("agency_admin" or "agency_user"))
+            return Results.Json(new { error = "Only Agency administrators and users can sell credit to Outlets." },
+                statusCode: StatusCodes.Status403Forbidden);
+        if (request.AmountKobo <= 0)
+            return Results.BadRequest(new { error = "Amount must be greater than zero." });
         try
         {
             var organizationId = ctx.GetOrganizationId();

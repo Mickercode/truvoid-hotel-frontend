@@ -112,8 +112,8 @@ public sealed class TenantWalletService
             JOIN outlet o ON o.id = @outletId
             JOIN wallet buyer ON buyer.id = o.wallet_id AND buyer.kind = 'outlet'
             WHERE t.org_type = 'agency'
-            FOR UPDATE
-            """);
+            FOR UPDATE OF seller, buyer
+            """); // lock only the wallets: a bare FOR UPDATE also locks tenant/outlet, which needs UPDATE grants the tenant role must not have
         command.Parameters.AddWithValue("outletId", outletId);
         await using var reader = await command.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))

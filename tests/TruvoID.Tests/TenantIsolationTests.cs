@@ -287,6 +287,27 @@ public class TenantIsolationTests : IClassFixture<TenantDatabase>
     }
 
     [Fact]
+    public async Task Agency_CanSellCreditToItsOutlet_AsTheTenantRole()
+    {
+        var (outletId, _) = await CreateTwoOutletsAsync(_t.AgencyId);
+        var wallets = new TenantWalletService();
+        await using (var fund = await _t.Factory.BeginAsync(TenantScope.Organization(_t.AgencyId)))
+        {
+            await wallets.CreditAsync(fund, 50_000, null, $"fund-{Guid.NewGuid():N}");
+            await fund.CommitAsync();
+        }
+
+        await using var org = await _t.Factory.BeginAsync(TenantScope.Organization(_t.AgencyId));
+        var (seller, outlet) = await wallets.TransferToOutletAsync(org, outletId, 20_000, $"resale-{Guid.NewGuid():N}");
+        await org.CommitAsync();
+
+        Assert.Equal(20_000, outlet.BalanceAfterKobo);
+        await using var outletScope = await _t.Factory.BeginAsync(TenantScope.Outlet(_t.AgencyId, outletId));
+        Assert.Equal(20_000, (await wallets.GetBalanceAsync(outletScope)).BalanceKobo);
+        Assert.True(seller.BalanceAfterKobo >= 30_000);
+    }
+
+    [Fact]
     public async Task Ledger_IsAppendOnlyForTheTenantRole()
     {
         await using var org = await _t.Factory.BeginAsync(TenantScope.Organization(_t.AgencyId));
