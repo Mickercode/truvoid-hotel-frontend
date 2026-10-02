@@ -40,7 +40,7 @@ public static class AuthEndpoints
         // JWTs are stateless here (no server-side session/token blocklist), so
         // there's nothing to actually invalidate — this exists so the frontend's
         // logout call has something to hit instead of a 404.
-        authGroup.MapGet("/logout", () => Results.Ok(new { message = "Logged out." }))
+        authGroup.MapPost("/logout", () => Results.Ok(new { message = "Logged out." }))
             .RequireAuthorization();
 
         return app;

@@ -14,12 +14,14 @@ var builder = WebApplication.CreateBuilder(args);
 // ── Postgres admin commands ────────────────────────────────────────────────
 // `dotnet TruvoID.API.dll migrate`           control plane + every tenant schema
 // `dotnet TruvoID.API.dll provision-tenants` create schema + role for pending Organizations
-// Both run with the DDL-owning migrator role as separate steps, so the running
+// `dotnet TruvoID.API.dll worker`            loop: provision-tenants + relay-revenue every few seconds
+// All run with the DDL-owning migrator role as separate processes, so the running
 // API only ever holds DML-only credentials.
-if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue")
+if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue" or "worker")
 {
-    var migratorConnectionString = builder.Configuration.GetConnectionString("PostgresMigrator")
-        ?? throw new InvalidOperationException("ConnectionStrings:PostgresMigrator is not set.");
+    var migratorConnectionString = NormalizePostgresConnectionString(
+        builder.Configuration.GetConnectionString("PostgresMigrator")
+        ?? throw new InvalidOperationException("ConnectionStrings:PostgresMigrator is not set."));
     using var loggerFactory = LoggerFactory.Create(logging => logging.AddConsole());
     var logger = loggerFactory.CreateLogger("Postgres");
 
@@ -38,6 +40,47 @@ if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue"
         var provisioned = await provisioner.ProvisionPendingAsync();
         Console.WriteLine($"Provisioned {provisioned} Organization(s).");
     }
+    else if (args[0] == "worker")
+    {
+        // Newly registered Organizations stay 'pending' until provisioned, so this
+        // runs as its own always-on service rather than only at deploy time.
+        var interval = TimeSpan.FromSeconds(builder.Configuration.GetValue("Worker:IntervalSeconds", 10));
+        var provisioner = new TenantProvisioner(migratorConnectionString, CreateTenantCredentialProtector(builder.Configuration), logger);
+        var relay = new RevenueOutboxRelay(migratorConnectionString);
+
+        using var stopping = new CancellationTokenSource();
+        using var sigterm = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+            System.Runtime.InteropServices.PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; stopping.Cancel(); });
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping.Cancel(); };
+
+        logger.LogInformation("Worker started; polling every {Interval}s.", interval.TotalSeconds);
+        while (!stopping.IsCancellationRequested)
+        {
+            try
+            {
+                var provisioned = await provisioner.ProvisionPendingAsync(stopping.Token);
+                if (provisioned > 0)
+                    logger.LogInformation("Provisioned {Count} Organization(s).", provisioned);
+
+                var delivered = await relay.RelayAsync(stopping.Token);
+                if (delivered > 0)
+                    logger.LogInformation("Delivered {Count} revenue event(s).", delivered);
+            }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                // A failed Organization rolls back and stays pending, so the next pass retries it.
+                logger.LogError(ex, "Worker pass failed; retrying in {Interval}s.", interval.TotalSeconds);
+            }
+
+            try { await Task.Delay(interval, stopping.Token); }
+            catch (OperationCanceledException) { break; }
+        }
+        logger.LogInformation("Worker stopped.");
+    }
     else
     {
         var delivered = await new RevenueOutboxRelay(migratorConnectionString).RelayAsync();
@@ -50,10 +93,11 @@ if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue"
 var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
 builder.WebHost.UseUrls($"http://+:{port}");
 
-var postgresConnectionString = builder.Configuration.GetConnectionString("Postgres")
+var postgresConnectionString = NormalizePostgresConnectionString(
+    builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException(
         "ConnectionStrings:Postgres is required for the Core API runtime. " +
-        "Use the DML-only truvo_app role, not PostgresMigrator.");
+        "Use the DML-only truvo_app role, not PostgresMigrator."));
 
 builder.Services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(postgresConnectionString));
 builder.Services.AddSingleton<PostgresApiKeyStore>();
@@ -109,7 +153,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ClockSkew = TimeSpan.Zero
         };
     })
-    // Lets /v1/verify/* accept an institution's own API key (X-API-Key header) as
+    // Lets /v1/tenant/verification-calls/reserve accept an institution's own API key (X-API-Key header) as
     // an alternative to a JWT — see ApiKeyAuthenticationHandler.
     .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationHandler.SchemeName, null);
 
@@ -124,7 +168,7 @@ builder.Services.AddAuthorization(options =>
 });
 
 var corsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>()
-    ?? ["http://localhost:5173"];
+    ?? ["https://gettruvoid.com", "https://www.gettruvoid.com", "http://localhost:5173"];
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy => policy
@@ -166,6 +210,17 @@ else
     });
 }
 
+app.Use(async (ctx, next) =>
+{
+    var headers = ctx.Response.Headers;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Referrer-Policy"] = "no-referrer";
+    if (!app.Environment.IsDevelopment())
+        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+    await next();
+});
+
 app.UseRouting();
 app.UseCors("Frontend");
 app.UseAuthentication();
@@ -175,6 +230,39 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
 app.MapTruvoIdEndpoints();
 
 app.Run();
+
+// Railway (and most hosts) hand out postgres:// URLs, which Npgsql rejects —
+// NpgsqlDataSource.Create then throws on first use and every DB-backed endpoint
+// returns 500. Accept either form and convert URLs to key/value.
+static string NormalizePostgresConnectionString(string value)
+{
+    if (!value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) &&
+        !value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+        return value;
+
+    var uri = new Uri(value);
+    var userInfo = uri.UserInfo.Split(':', 2);
+    var builder = new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.Port > 0 ? uri.Port : 5432,
+        Database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/')),
+        Username = Uri.UnescapeDataString(userInfo[0]),
+        Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : null
+    };
+
+    var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+    builder.SslMode = query["sslmode"]?.ToLowerInvariant() switch
+    {
+        "disable" => SslMode.Disable,
+        "allow" => SslMode.Allow,
+        "require" => SslMode.Require,
+        "verify-ca" => SslMode.VerifyCA,
+        "verify-full" => SslMode.VerifyFull,
+        _ => SslMode.Prefer
+    };
+    return builder.ConnectionString;
+}
 
 // Postgres:TenantCredentialKey is a base64 32-byte key (openssl rand -base64 32).
 static TenantCredentialProtector CreateTenantCredentialProtector(IConfiguration configuration) =>
