@@ -11,7 +11,9 @@ public sealed record ControlPlaneUser(
     string CredentialHash,
     string Role,
     string Status,
-    string OrganizationName);
+    string OrganizationName,
+    // control.organization.status ('pending' until the worker provisions it); null for platform admins
+    string? OrganizationStatus = null);
 
 public sealed record RegisteredIdentity(Guid UserId, Guid OrganizationId);
 public sealed record AgencyInvitation(Guid InvitationId, Guid OrganizationId, Guid UserId);
@@ -358,7 +360,7 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
     {
         await using var command = controlPlane.CreateCommand($"""
             SELECT u.id, u.organization_id, u.outlet_id, u.email, u.full_name,
-                   u.credential_hash, u.role, u.status, coalesce(o.name, '')
+                   u.credential_hash, u.role, u.status, coalesce(o.name, ''), o.status
             FROM control.app_user u
             LEFT JOIN control.organization o ON o.id = u.organization_id
             {predicate}
@@ -378,6 +380,7 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
             reader.GetString(5),
             reader.GetString(6),
             reader.GetString(7),
-            reader.GetString(8));
+            reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetString(9));
     }
 }

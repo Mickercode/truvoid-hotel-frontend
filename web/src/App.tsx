@@ -18,6 +18,7 @@ import { AboutPage } from "./AboutPage";
 import { VerifyPage } from "./VerifyPage";
 import { VerificationHistoryPage } from "./VerificationHistoryPage";
 import { TeamPage } from "./TeamPage";
+import { AcceptInvite, Login, Register } from "./AuthScreens";
 
 type Json = Record<string, unknown>;
 function Field({
@@ -115,236 +116,6 @@ function AuthFrame({
 }
 function Home() {
   return <MarketingHome />;
-}
-function Login({ onLogin }: { onLogin: (profile: AuthProfile) => void }) {
-  const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    try {
-      tokenStore.save(await api.login(email, password));
-      onLogin(await api.profile());
-      navigate("/dashboard");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Sign in failed.");
-    }
-  }
-  return (
-    <AuthFrame
-      title={
-        <>
-          Verify with
-          <br />
-          <span className="gradient-text">confidence.</span>
-        </>
-      }
-    >
-      <form onSubmit={submit}>
-        <Field
-          label="Email address"
-          required
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-        />
-        <Field
-          label="Password"
-          required
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
-        <Notice message={message} error />
-        <Button>Sign in ↗</Button>
-      </form>
-      <div className="auth-foot">
-        <Link to="/register">Create an institution account</Link>
-        <span> · </span>
-        <Link to="/accept-agency-invite">Accept agency invitation</Link>
-      </div>
-    </AuthFrame>
-  );
-}
-function Register({ onLogin }: { onLogin: (profile: AuthProfile) => void }) {
-  const navigate = useNavigate();
-  const [message, setMessage] = useState("");
-  const [form, setForm] = useState({
-    institutionName: "",
-    adminFullName: "",
-    adminEmail: "",
-    password: "",
-  });
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    try {
-      tokenStore.save(
-        (await api.post("/v1/auth/register", {
-          ...form,
-          type: "institution",
-        })) as never,
-      );
-      onLogin(await api.profile());
-      navigate("/setup");
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Registration failed.",
-      );
-    }
-  }
-  return (
-    <AuthFrame
-      eyebrow="CREATE AN INSTITUTION WORKSPACE"
-      title={
-        <>
-          Start with
-          <br />
-          <span className="gradient-text">clarity.</span>
-        </>
-      }
-    >
-      <p className="lede">
-        Create the workspace first. Complete your organization profile
-        progressively.
-      </p>
-      <form onSubmit={submit}>
-        <Field
-          label="Institution name"
-          required
-          value={form.institutionName}
-          onChange={(event) =>
-            setForm({ ...form, institutionName: event.target.value })
-          }
-        />
-        <Field
-          label="Administrator name"
-          required
-          value={form.adminFullName}
-          onChange={(event) =>
-            setForm({ ...form, adminFullName: event.target.value })
-          }
-        />
-        <Field
-          label="Administrator email"
-          required
-          type="email"
-          value={form.adminEmail}
-          onChange={(event) =>
-            setForm({ ...form, adminEmail: event.target.value })
-          }
-        />
-        <Field
-          label="Password"
-          required
-          type="password"
-          minLength={8}
-          value={form.password}
-          onChange={(event) =>
-            setForm({ ...form, password: event.target.value })
-          }
-        />
-        <Notice message={message} error />
-        <Button>Create institution workspace ↗</Button>
-      </form>
-    </AuthFrame>
-  );
-}
-function AcceptAgencyInvite() {
-  const [params] = useSearchParams();
-  const navigate = useNavigate();
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const token = params.get("token") ?? "";
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    try {
-      await api.post("/v1/auth/agency-invitations/accept", { token, password });
-      setMessage("Invitation accepted. Sign in to continue.");
-      setTimeout(() => navigate("/login"), 900);
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Invitation could not be accepted.",
-      );
-    }
-  }
-  return (
-    <AuthFrame
-      eyebrow="AGENCY INVITATION"
-      title={
-        <>
-          Join your
-          <br />
-          <span className="gradient-text">agency workspace.</span>
-        </>
-      }
-    >
-      <p className="lede">
-        Set your password to activate the agency administrator account.
-      </p>
-      <form onSubmit={submit}>
-        <Field
-          label="Password"
-          required
-          type="password"
-          minLength={8}
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
-        <Notice message={message} error={message.includes("could")} />
-        <Button disabled={!token}>Accept invitation ↗</Button>
-      </form>
-    </AuthFrame>
-  );
-}
-function AcceptTeamInvite() {
-  const [params] = useSearchParams();
-  const navigate = useNavigate();
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const token = params.get("token") ?? "";
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    try {
-      await api.post("/v1/auth/team-invitations/accept", { token, password });
-      setMessage("Invitation accepted. Sign in to continue.");
-      setTimeout(() => navigate("/login"), 900);
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Invitation could not be accepted.",
-      );
-    }
-  }
-  return (
-    <AuthFrame
-      eyebrow="TEAM INVITATION"
-      title={
-        <>
-          Join your
-          <br />
-          <span className="gradient-text">workspace.</span>
-        </>
-      }
-    >
-      <p className="lede">Set your password to activate your team account.</p>
-      <form onSubmit={submit}>
-        <Field
-          label="Password"
-          required
-          type="password"
-          minLength={8}
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
-        <Notice message={message} error={message.includes("could")} />
-        <Button disabled={!token}>Accept invitation ↗</Button>
-      </form>
-    </AuthFrame>
-  );
 }
 function Shell({
   profile,
@@ -873,10 +644,10 @@ export function App() {
       <Route path="/solutions" element={<SolutionsPage />} />
       <Route path="/api-and-developers" element={<ApiDevelopersPage />} />
       <Route path="/about" element={<AboutPage />} />
-      <Route path="/login" element={<Login onLogin={setProfile} />} />
-      <Route path="/register" element={<Register onLogin={setProfile} />} />
-      <Route path="/accept-agency-invite" element={<AcceptAgencyInvite />} />
-      <Route path="/accept-team-invite" element={<AcceptTeamInvite />} />
+      <Route path="/login" element={<Login onLogin={setProfile} Frame={AuthFrame} />} />
+      <Route path="/register" element={<Register onLogin={setProfile} Frame={AuthFrame} />} />
+      <Route path="/accept-agency-invite" element={<AcceptInvite kind="agency" Frame={AuthFrame} />} />
+      <Route path="/accept-team-invite" element={<AcceptInvite kind="team" Frame={AuthFrame} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

@@ -77,6 +77,8 @@ public static class AgencyInvitationEndpoints
     {
         if (string.IsNullOrWhiteSpace(request.Token))
             return Results.BadRequest(new { error = "Invitation token is required." });
+        if (AuthValidation.ValidatePassword(request.Password) is { } passwordError)
+            return Results.BadRequest(new { error = passwordError });
 
         var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Token))).ToLowerInvariant();
         try

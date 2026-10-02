@@ -54,8 +54,8 @@ public static class AuthEndpoints
         var userId = ctx.GetUserId();
         if (userId == Guid.Empty) return Results.Unauthorized();
 
-        if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
-            return Results.BadRequest(new { error = "New password must be at least 8 characters." });
+        if (AuthValidation.ValidatePassword(request.NewPassword) is { } passwordError)
+            return Results.BadRequest(new { error = passwordError });
 
         var user = await identities.FindByIdAsync(userId);
         if (user is null) return Results.Unauthorized();
@@ -84,6 +84,9 @@ public static class AuthEndpoints
         RegisterRequest request,
         ControlPlaneIdentityStore identities)
     {
+        if (AuthValidation.ValidateRegistration(request.InstitutionName, request.AdminFullName, request.AdminEmail, request.Password) is { } validationError)
+            return Results.BadRequest(new { error = validationError });
+
         try
         {
             var organizationType = request.Type.Trim().ToLowerInvariant() switch
@@ -126,13 +129,24 @@ public static class AuthEndpoints
         ControlPlaneIdentityStore identities,
         IAuditService audit)
     {
+        if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrEmpty(request.Password))
+            return Results.BadRequest(new { error = "Enter your email address and password." });
+
         var user = await identities.FindByEmailAsync(request.Email);
 
+        // Same message for unknown email and wrong password, so login can't be used to probe accounts.
         if (user is null || !PasswordHasher.Verify(request.Password, user.CredentialHash))
-            return Results.Unauthorized();
+            return Results.Json(new { error = "Incorrect email or password." }, statusCode: StatusCodes.Status401Unauthorized);
 
         if (user.Status != "active")
-            return Results.Forbid();
+            return Results.Json(new { error = user.Status == "invited"
+                    ? "This account hasn't been activated yet. Use the link in your invitation email."
+                    : "This account has been disabled. Contact your organization administrator." },
+                statusCode: StatusCodes.Status403Forbidden);
+
+        if (user.OrganizationStatus is "suspended" or "closed")
+            return Results.Json(new { error = "Your organization's access has been suspended. Contact TruvoID support." },
+                statusCode: StatusCodes.Status403Forbidden);
 
         await identities.MarkLoginAsync(user.Id);
         await audit.LogAsync(AuditAction.Login, "User", user.Id, user.Id, "User");
@@ -213,7 +227,8 @@ public static class AuthEndpoints
             FullName = user.FullName ?? string.Empty,
             Role = ToLegacyClaimRole(user.Role),
             InstitutionName = user.OrganizationName,
-            OutletId = user.OutletId?.ToString()
+            OutletId = user.OutletId?.ToString(),
+            OrganizationStatus = user.OrganizationStatus
         });
     }
 
@@ -389,4 +404,6 @@ public record AuthProfileResponse
     public string Role { get; init; } = "";
     public string InstitutionName { get; init; } = "";
     public string? OutletId { get; init; }
+    /// <summary>pending | active | suspended | closed; null for platform admins.</summary>
+    public string? OrganizationStatus { get; init; }
 }

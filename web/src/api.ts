@@ -6,6 +6,14 @@ export type AuthProfile = {
   role: string
   institutionName: string
   outletId?: string | null
+  /** pending until the worker provisions the workspace; null for platform admins */
+  organizationStatus?: 'pending' | 'active' | 'suspended' | 'closed' | null
+}
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
 }
 
 type Tokens = {
@@ -45,7 +53,12 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
   if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   if (tokenStore.accessToken) headers.set('Authorization', `Bearer ${tokenStore.accessToken}`)
 
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+  } catch {
+    throw new ApiError("We couldn't reach TruvoID. Check your connection and try again.", 0)
+  }
   if (response.status === 401 && retry && tokenStore.refreshToken && tokenStore.accessToken) {
     const refresh = await fetch(`${API_BASE_URL}/v1/auth/refresh`, {
       method: 'POST',
@@ -61,10 +74,16 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
 
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: string; message?: string } | null
-    throw new Error(body?.error ?? body?.message ?? `Request failed (${response.status})`)
+    throw new ApiError(body?.error ?? body?.message ?? fallbackMessage(response.status), response.status)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
+}
+
+function fallbackMessage(status: number) {
+  if (status === 429) return 'Too many attempts. Please wait a moment and try again.'
+  if (status >= 500) return 'TruvoID is having trouble right now. Please try again shortly.'
+  return `Request failed (${status}).`
 }
 
 export const api = {

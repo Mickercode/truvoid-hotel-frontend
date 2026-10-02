@@ -93,6 +93,10 @@ public static class TenantTeamEndpoints
 
     private static async Task<IResult> Accept(AcceptTeamInvitationRequest request, ControlPlaneIdentityStore identities, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(request.Token))
+            return Results.BadRequest(new { error = "Invitation token is required." });
+        if (AuthValidation.ValidatePassword(request.Password) is { } passwordError)
+            return Results.BadRequest(new { error = passwordError });
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Token))).ToLowerInvariant();
         try
         {
