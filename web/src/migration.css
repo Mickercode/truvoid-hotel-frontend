@@ -254,3 +254,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .margin { margin: 0; color: var(--lime); font: 12px 'DM Mono', monospace; }
 .margin.negative { color: #ff9d9d; }
 .price-tag { margin-left: 10px; padding: 2px 7px; background: #0a111233; border: 1px solid #0a111244; font: 12px 'DM Mono', monospace; }
+
+/* ── Sandbox banner ──────────────────────────────────────────────────────── */
+.sandbox-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 52px; border-bottom: 1px solid #8a6d2b; background: repeating-linear-gradient(135deg, #1f1a0d 0 14px, #1b170c 14px 28px); color: #e8d29a; font-size: 12px; }
+.sandbox-banner strong { color: #f1ce70; font: 11px 'DM Mono', monospace; letter-spacing: .12em; }
+@media (max-width: 760px) { .sandbox-banner { padding: 10px 22px; } }

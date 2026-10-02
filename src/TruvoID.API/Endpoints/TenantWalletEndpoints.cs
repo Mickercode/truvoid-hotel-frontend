@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using TruvoID.Infrastructure.Identity;
 using TruvoID.Infrastructure.Postgres;
 
 namespace TruvoID.API.Endpoints;
@@ -15,8 +16,41 @@ public static class TenantWalletEndpoints
         app.MapPost("/v1/admin/tenant-wallets/{organizationId:guid}/credit", CreditOrganizationWallet)
             .RequireAuthorization("TruvoAdmin");
         group.MapPost("/outlets/{outletId:guid}/purchase-credit", PurchaseOutletCredit);
+        group.MapPost("/sandbox-funds", AddSandboxFunds).RequireAuthorization("TenantManager");
         return app;
     }
+
+    /// <summary>
+    /// Sandbox only: free test credit so integrators can exercise billing without paying.
+    /// Returns 404 on live deployments, so it can't be found there, let alone abused.
+    /// </summary>
+    private static async Task<IResult> AddSandboxFunds(
+        HttpContext ctx,
+        SandboxFundsRequest? request,
+        IIdentityProvider provider,
+        TenantConnectionFactory tenants,
+        TenantWalletService wallets,
+        CancellationToken ct)
+    {
+        if (provider.Environment != "sandbox")
+            return Results.NotFound();
+        var amount = request?.AmountKobo ?? 1_000_000; // ₦10,000
+        if (amount is <= 0 or > 100_000_000)
+            return Results.BadRequest(new { error = "Test funds must be between ₦0.01 and ₦1,000,000 per top-up." });
+        try
+        {
+            await using var session = await tenants.BeginAsync(TenantScope.Organization(ctx.GetOrganizationId()), ct);
+            var mutation = await wallets.CreditAsync(session, amount, null, $"sandbox-funds-{Guid.NewGuid():N}", ct: ct);
+            await session.CommitAsync(ct);
+            return Results.Ok(new { creditedKobo = amount, balanceAfterKobo = mutation.BalanceAfterKobo, environment = "sandbox" });
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not an active, provisioned tenant"))
+        {
+            return Results.Conflict(new { error = "Your workspace is still being set up.", code = "workspace_not_ready" });
+        }
+    }
+
+    public sealed record SandboxFundsRequest(long? AmountKobo);
 
     private static async Task<IResult> GetBalance(
         HttpContext ctx,

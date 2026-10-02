@@ -11,7 +11,6 @@ namespace TruvoID.API.Endpoints;
 
 public static class ApiKeyEndpoints
 {
-    private const string KeyPrefixTag = "trv_live_";
 
     public static IEndpointRouteBuilder MapApiKeyEndpoints(this IEndpointRouteBuilder app)
     {
@@ -122,8 +121,8 @@ public static class ApiKeyEndpoints
         CancellationToken ct)
     {
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        var rawKey = $"{KeyPrefixTag}{secret}";
-        var prefix = rawKey[..(KeyPrefixTag.Length + 8)];
+        var rawKey = $"{keys.KeyPrefixTag}{secret}";
+        var prefix = rawKey[..(keys.KeyPrefixTag.Length + 8)];
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawKey))).ToLowerInvariant();
         var stored = await keys.CreateAsync(organizationId, outletId, prefix, hash,
             string.IsNullOrWhiteSpace(description) ? null : description.Trim(), userId == Guid.Empty ? null : userId, ct);

@@ -16,8 +16,16 @@ public sealed record PostgresApiKey(
     DateTime? RevokedAt,
     long CallCount);
 
-public sealed class PostgresApiKeyStore(NpgsqlDataSource dataSource)
+/// <param name="environment">"live" or "test". A sandbox deployment issues test keys
+/// (trv_test_…) so a key's prefix always says which environment it belongs to.</param>
+public sealed class PostgresApiKeyStore(NpgsqlDataSource dataSource, string environment = "live")
 {
+    public string Environment { get; } = environment is "live" or "test"
+        ? environment : throw new ArgumentException("API key environment must be 'live' or 'test'.", nameof(environment));
+
+    /// <summary>trv_live_ or trv_test_.</summary>
+    public string KeyPrefixTag => $"trv_{Environment}_";
+
     public async Task<PostgresApiKey?> FindByHashAsync(string keyHash, CancellationToken ct = default)
     {
         await using var command = dataSource.CreateCommand("""
@@ -55,11 +63,12 @@ public sealed class PostgresApiKeyStore(NpgsqlDataSource dataSource)
             INSERT INTO control.api_key
                 (organization_id, outlet_id, environment, key_prefix, key_hash,
                  customer_label, scopes, created_by_user_id)
-            VALUES (@organizationId, @outletId, 'live', @keyPrefix, @keyHash,
+            VALUES (@organizationId, @outletId, @environment, @keyPrefix, @keyHash,
                     @description, @scopes, @createdBy)
             RETURNING id, organization_id, outlet_id, key_prefix, key_hash,
                       customer_label, status, created_at, last_used_at, revoked_at, call_count
             """);
+        command.Parameters.AddWithValue("environment", Environment);
         command.Parameters.AddWithValue("organizationId", organizationId);
         command.Parameters.AddWithValue("outletId", (object?)outletId ?? DBNull.Value);
         command.Parameters.AddWithValue("keyPrefix", keyPrefix);

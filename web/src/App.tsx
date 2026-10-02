@@ -20,6 +20,7 @@ import { VerificationHistoryPage } from "./VerificationHistoryPage";
 import { TeamPage } from "./TeamPage";
 import { AcceptInvite, Login, Register } from "./AuthScreens";
 import { PricingPage } from "./PricingPage";
+import { useEnvironment } from "./useEnvironment";
 
 type Json = Record<string, unknown>;
 function Field({
@@ -127,6 +128,7 @@ function Shell({
 }) {
   const location = useLocation();
   const isAdmin = profile.role.toLowerCase().includes("platform");
+  const environment = useEnvironment();
   const items = [
     ["/dashboard", "Overview"],
     ["/setup", "Organization setup"],
@@ -208,6 +210,12 @@ function Shell({
             </div>
           </div>
         </header>
+        {environment === "sandbox" && (
+          <div className="sandbox-banner" role="note">
+            <strong>SANDBOX</strong> Test environment — no real identity lookups or payments.
+            Use the documented test numbers and free test funds.
+          </div>
+        )}
         <div className="page-content">
           <Routes>
             <Route
@@ -389,7 +397,10 @@ function Outlets() {
 function Wallet() {
   const [balance, setBalance] = useState<Json>({});
   const [ledger, setLedger] = useState<Json[]>([]);
-  useEffect(() => {
+  const environment = useEnvironment();
+  const [funding, setFunding] = useState(false);
+  const [fundMessage, setFundMessage] = useState<{ text: string; error?: boolean } | null>(null);
+  function load() {
     Promise.all([
       api.get<Json>("/v1/tenant/wallet/balance"),
       api.get<Json[]>("/v1/tenant/wallet/ledger?page=1&pageSize=20"),
@@ -399,7 +410,21 @@ function Wallet() {
         setLedger(entries);
       })
       .catch(() => undefined);
-  }, []);
+  }
+  useEffect(load, []);
+  async function addTestFunds() {
+    setFunding(true);
+    setFundMessage(null);
+    try {
+      await api.post("/v1/tenant/wallet/sandbox-funds", { amountKobo: 1_000_000 });
+      setFundMessage({ text: "₦10,000.00 of test funds added." });
+      load();
+    } catch (error) {
+      setFundMessage({ text: error instanceof Error ? error.message : "Test funds could not be added.", error: true });
+    } finally {
+      setFunding(false);
+    }
+  }
   return (
     <section>
       <PageTitle eyebrow="TENANT / WALLET" title="Wallet.">
@@ -417,9 +442,19 @@ function Wallet() {
               minimumFractionDigits: 2,
             })}
           </strong>
-          <span className="stat-note">Tenant wallet balance</span>
+          <span className="stat-note">
+            {environment === "sandbox" ? "Sandbox test balance — not real money" : "Tenant wallet balance"}
+          </span>
         </div>
+        {environment === "sandbox" && (
+          <button className="button button-primary" onClick={() => void addTestFunds()} disabled={funding}>
+            {funding ? <><span className="spinner" aria-hidden="true" />Adding…</> : "Add ₦10,000 test funds"}
+          </button>
+        )}
       </div>
+      {fundMessage && (
+        <div className={`notice ${fundMessage.error ? "error" : "success"}`} role="status">{fundMessage.text}</div>
+      )}
       <div className="section-heading">
         <div>
           <div className="eyebrow">LEDGER</div>

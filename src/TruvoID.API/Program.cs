@@ -130,7 +130,10 @@ var postgresConnectionString = NormalizePostgresConnectionString(
         "Use the DML-only truvo_app role, not PostgresMigrator."));
 
 builder.Services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(postgresConnectionString));
-builder.Services.AddSingleton<PostgresApiKeyStore>();
+builder.Services.AddSingleton(sp => new PostgresApiKeyStore(
+    sp.GetRequiredService<NpgsqlDataSource>(),
+    // A sandbox deployment issues trv_test_ keys; production issues trv_live_ keys.
+    string.Equals(builder.Configuration["Verification:Provider"], "sandbox", StringComparison.OrdinalIgnoreCase) ? "test" : "live"));
 builder.Services.AddSingleton<OrganizationSetupStore>();
 builder.Services.AddSingleton<OrganizationBrandingStore>();
 builder.Services.AddSingleton(CreateTenantCredentialProtector(builder.Configuration));
