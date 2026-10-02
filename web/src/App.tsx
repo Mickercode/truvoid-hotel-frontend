@@ -8,7 +8,7 @@ import {
   useNavigate,
   useSearchParams,
 } from "react-router-dom";
-import { api, AuthProfile, tokenStore } from "./api";
+import { api, AuthProfile, SESSION_EXPIRED_EVENT, tokenStore } from "./api";
 import { ApiKeysPage } from "./ApiKeysPage";
 import { OrganizationSetupPage } from "./OrganizationSetupPage";
 import { MarketingHome } from "./MarketingHome";
@@ -661,6 +661,12 @@ export function App() {
       .catch(() => tokenStore.clear())
       .finally(() => setLoading(false));
   }, []);
+  useEffect(() => {
+    // Fired by api.ts when a refresh fails: drop back to the sign-in screen.
+    const expire = () => setProfile(null);
+    window.addEventListener(SESSION_EXPIRED_EVENT, expire);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expire);
+  }, []);
   if (loading)
     return (
       <div className="loading-screen">
@@ -673,7 +679,7 @@ export function App() {
       <Shell
         profile={profile}
         onLogout={() => {
-          tokenStore.clear();
+          void api.logout();
           setProfile(null);
         }}
       />

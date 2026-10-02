@@ -68,7 +68,13 @@ public static class TenantTeamEndpoints
         return Results.Ok(new { invitationId = invitation.InvitationId, invitationToken = rawToken, expiresAt = DateTime.UtcNow.AddDays(7) });
     }
 
-    private static async Task<IResult> Disable(HttpContext ctx, Guid userId, ControlPlaneIdentityStore identities, CancellationToken ct) => await ChangeStatus(ctx, userId, "disabled", identities, ct);
+    private static async Task<IResult> Disable(HttpContext ctx, Guid userId, ControlPlaneIdentityStore identities, RefreshTokenStore refreshTokens, CancellationToken ct)
+    {
+        var result = await ChangeStatus(ctx, userId, "disabled", identities, ct);
+        if (result is IStatusCodeHttpResult { StatusCode: 200 })
+            await refreshTokens.RevokeAllForUserAsync(userId, ct); // end their sessions now, not at next refresh
+        return result;
+    }
     private static async Task<IResult> Reactivate(HttpContext ctx, Guid userId, ControlPlaneIdentityStore identities, CancellationToken ct) => await ChangeStatus(ctx, userId, "active", identities, ct);
 
     private static async Task<IResult> ChangeStatus(HttpContext ctx, Guid userId, string status, ControlPlaneIdentityStore identities, CancellationToken ct)

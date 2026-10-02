@@ -37,11 +37,15 @@ public static class AuthEndpoints
         authGroup.MapPost("/deactivate", DeactivateAccount)
             .RequireAuthorization();
 
-        // JWTs are stateless here (no server-side session/token blocklist), so
-        // there's nothing to actually invalidate — this exists so the frontend's
-        // logout call has something to hit instead of a 404.
-        authGroup.MapPost("/logout", () => Results.Ok(new { message = "Logged out." }))
-            .RequireAuthorization();
+        // Revokes the session's refresh-token family. Anonymous on purpose: holding the
+        // refresh token is the proof, and an expired access token must not block sign-out.
+        authGroup.MapPost("/logout", async (LogoutRequest? request, RefreshTokenStore refreshTokens, CancellationToken ct) =>
+            {
+                if (!string.IsNullOrWhiteSpace(request?.RefreshToken))
+                    await refreshTokens.RevokeFamilyOfAsync(request.RefreshToken, ct);
+                return Results.Ok(new { message = "Logged out." });
+            })
+            .AllowAnonymous().RequireRateLimiting("auth");
 
         return app;
     }
@@ -49,7 +53,8 @@ public static class AuthEndpoints
     private static async Task<IResult> ChangePassword(
         HttpContext ctx,
         ChangePasswordRequest request,
-        ControlPlaneIdentityStore identities)
+        ControlPlaneIdentityStore identities,
+        RefreshTokenStore refreshTokens)
     {
         var userId = ctx.GetUserId();
         if (userId == Guid.Empty) return Results.Unauthorized();
@@ -65,7 +70,17 @@ public static class AuthEndpoints
 
         await identities.UpdatePasswordAsync(userId, PasswordHasher.Hash(request.NewPassword));
 
-        return Results.Ok(new { message = "Password changed successfully." });
+        // Sign out every other device; this one gets a fresh session.
+        await refreshTokens.RevokeAllForUserAsync(userId);
+        var (accessToken, expiresAt) = GenerateAccessToken(
+            user.OrganizationId ?? Guid.Empty, user.Id, ToLegacyClaimRole(user.Role), user.OutletId, user.Role);
+        return Results.Ok(new
+        {
+            message = "Password changed. You have been signed out on other devices.",
+            accessToken,
+            refreshToken = await refreshTokens.IssueAsync(user.Id),
+            expiresAt,
+        });
     }
 
     private static async Task<IResult> DeactivateAccount(
@@ -82,7 +97,8 @@ public static class AuthEndpoints
 
     private static async Task<IResult> Register(
         RegisterRequest request,
-        ControlPlaneIdentityStore identities)
+        ControlPlaneIdentityStore identities,
+        RefreshTokenStore refreshTokens)
     {
         if (AuthValidation.ValidateRegistration(request.InstitutionName, request.AdminFullName, request.AdminEmail, request.Password) is { } validationError)
             return Results.BadRequest(new { error = validationError });
@@ -101,7 +117,7 @@ public static class AuthEndpoints
                 request.AdminEmail,
                 request.Password);
 
-            var (accessToken, refreshToken, expiresAt) = GenerateTokens(
+            var (accessToken, expiresAt) = GenerateAccessToken(
                 registered.OrganizationId,
                 registered.UserId,
                 "Admin",
@@ -110,7 +126,7 @@ public static class AuthEndpoints
             return Results.Ok(new RegisterResponse
             {
                 AccessToken = accessToken,
-                RefreshToken = refreshToken,
+                RefreshToken = await refreshTokens.IssueAsync(registered.UserId),
                 ExpiresAt = expiresAt
             });
         }
@@ -127,6 +143,7 @@ public static class AuthEndpoints
     private static async Task<IResult> Login(
         LoginRequest request,
         ControlPlaneIdentityStore identities,
+        RefreshTokenStore refreshTokens,
         IAuditService audit)
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrEmpty(request.Password))
@@ -151,7 +168,7 @@ public static class AuthEndpoints
         await identities.MarkLoginAsync(user.Id);
         await audit.LogAsync(AuditAction.Login, "User", user.Id, user.Id, "User");
 
-        var (accessToken, refreshToken, expiresAt) = GenerateTokens(
+        var (accessToken, expiresAt) = GenerateAccessToken(
             user.OrganizationId ?? Guid.Empty,
             user.Id,
             ToLegacyClaimRole(user.Role),
@@ -161,41 +178,41 @@ public static class AuthEndpoints
         return Results.Ok(new LoginResponse
         {
             AccessToken = accessToken,
-            RefreshToken = refreshToken,
+            RefreshToken = await refreshTokens.IssueAsync(user.Id),
             ExpiresAt = expiresAt
         });
     }
 
     private static async Task<IResult> RefreshToken(
         RefreshTokenRequest request,
-        ControlPlaneIdentityStore identities)
+        ControlPlaneIdentityStore identities,
+        RefreshTokenStore refreshTokens,
+        ILoggerFactory loggerFactory)
     {
-        // Validate the old access token and issue new tokens.
-        // institutionId == Guid.Empty is valid for platform-level accounts — only a
-        // missing/invalid userId means the token itself didn't parse.
-        var (userId, _, _) = GetClaimsFromToken(request.OldAccessToken);
+        var rotation = await refreshTokens.RotateAsync(request.RefreshToken);
+        if (rotation.Outcome == RefreshOutcome.Reused)
+            loggerFactory.CreateLogger("Auth").LogWarning(
+                "Refresh token reuse for user {UserId}; every session from that sign-in was revoked.", rotation.UserId);
+        if (rotation.Outcome != RefreshOutcome.Rotated)
+            return Results.Json(new { error = "Your session has expired. Please sign in again.", code = "session_expired" },
+                statusCode: StatusCodes.Status401Unauthorized);
 
-        if (userId == Guid.Empty)
-            return Results.Unauthorized();
+        var user = await identities.FindByIdAsync(rotation.UserId);
+        if (user is null || user.Status != "active" || user.OrganizationStatus is "suspended" or "closed")
+        {
+            await refreshTokens.RevokeAllForUserAsync(rotation.UserId);
+            return Results.Json(new { error = "This account can no longer sign in. Contact your administrator.", code = "account_inactive" },
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
 
-        var user = await identities.FindByIdAsync(userId);
-        if (user is null)
-            return Results.Unauthorized();
-
-        if (user.Status != "active")
-            return Results.Forbid();
-
-        var (accessToken, refreshToken, expiresAt) = GenerateTokens(
-            user.OrganizationId ?? Guid.Empty,
-            userId,
-            ToLegacyClaimRole(user.Role),
-            user.OutletId,
-            user.Role);
+        // Role and organization are re-read on every refresh, so changes apply within one access-token lifetime.
+        var (accessToken, expiresAt) = GenerateAccessToken(
+            user.OrganizationId ?? Guid.Empty, user.Id, ToLegacyClaimRole(user.Role), user.OutletId, user.Role);
 
         return Results.Ok(new LoginResponse
         {
             AccessToken = accessToken,
-            RefreshToken = refreshToken,
+            RefreshToken = rotation.NewToken!,
             ExpiresAt = expiresAt
         });
     }
@@ -261,7 +278,7 @@ public static class AuthEndpoints
     private static int JwtExpiryMinutes =>
         int.TryParse(Environment.GetEnvironmentVariable("Jwt__ExpiryMinutes"), out var m) ? m : 60;
 
-    private static (string access, string refresh, DateTime expires) GenerateTokens(
+    private static (string access, DateTime expires) GenerateAccessToken(
         Guid organizationId,
         Guid userId,
         string role,
@@ -299,14 +316,7 @@ public static class AuthEndpoints
             signingCredentials: credentials
         );
 
-        var accessToken = new JwtSecurityTokenHandler().WriteToken(token);
-
-        // Refresh token: cryptographically random, stored server-side in production
-        var refreshTokenBytes = new byte[32];
-        RandomNumberGenerator.Fill(refreshTokenBytes);
-        var refreshToken = Convert.ToBase64String(refreshTokenBytes);
-
-        return (accessToken, refreshToken, expiresAt);
+        return (new JwtSecurityTokenHandler().WriteToken(token), expiresAt);
     }
 
     private static (Guid userId, Guid institutionId, string role) GetClaimsFromToken(string token)
@@ -368,9 +378,12 @@ public static class AuthEndpoints
 
     public record RefreshTokenRequest
     {
+        /// <summary>Ignored; still accepted so older clients that send it keep working.</summary>
         public string OldAccessToken { get; init; } = "";
         public string RefreshToken { get; init; } = "";
     }
+
+    public record LogoutRequest(string? RefreshToken);
 
     public record ChangePasswordRequest
     {

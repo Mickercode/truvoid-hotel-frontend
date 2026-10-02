@@ -142,6 +142,9 @@ builder.Services.AddSingleton<TenantConnectionFactory>(sp => new TenantConnectio
     postgresConnectionString,
     sp.GetRequiredService<TenantCredentialProtector>()));
 builder.Services.AddScoped<ControlPlaneIdentityStore>();
+builder.Services.AddSingleton(sp => new RefreshTokenStore(
+    sp.GetRequiredService<NpgsqlDataSource>(),
+    TimeSpan.FromDays(builder.Configuration.GetValue("Jwt:RefreshDays", 30))));
 builder.Services.AddScoped<TenantWalletService>();
 builder.Services.AddScoped<TenantVerificationService>();
 var resendApiKey = builder.Configuration["Resend:ApiKey"] ?? Environment.GetEnvironmentVariable("RESEND_API_KEY");

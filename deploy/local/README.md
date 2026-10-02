@@ -3,7 +3,7 @@
 ```powershell
 docker compose -f deploy/local/docker-compose.yml up -d
 
-$env:ConnectionStrings__PostgresMigrator = "Host=localhost;Port=5433;Database=truvoid;Username=truvo_migrator;Password=truvo_migrator_dev"
+$env:ConnectionStrings__PostgresMigrator = "Host=127.0.0.1;Port=5433;Database=truvoid;Username=truvo_migrator;Password=truvo_migrator_dev"
 dotnet run --project src/TruvoID.API -- migrate
 
 # Create schema + database role for every 'pending' Organization.
@@ -15,7 +15,7 @@ dotnet run --project src/TruvoID.API -- provision-tenants
 dotnet run --project src/TruvoID.API -- relay-revenue
 
 # Runtime API credentials use the DML-only role and the same credential key.
-$env:ConnectionStrings__Postgres = "Host=localhost;Port=5433;Database=truvoid;Username=truvo_app;Password=truvo_app_dev"
+$env:ConnectionStrings__Postgres = "Host=127.0.0.1;Port=5433;Database=truvoid;Username=truvo_app;Password=truvo_app_dev"
 $env:Postgres__TenantCredentialKey = "<same base64 32-byte key>"
 dotnet run --project src/TruvoID.API
 ```

@@ -49,10 +49,40 @@ export const tokenStore = {
   },
 }
 
+export const SESSION_EXPIRED_EVENT = 'truvoid:session-expired'
+
+// One refresh at a time. Refresh tokens rotate on every use, so two parallel refreshes
+// with the same token would look like token theft to the server.
+let refreshing: Promise<boolean> | null = null
+
+function refreshSession(): Promise<boolean> {
+  refreshing ??= (async () => {
+    const refreshToken = tokenStore.refreshToken
+    if (!refreshToken) return false
+    try {
+      const response = await fetch(`${API_BASE_URL}/v1/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      })
+      if (response.ok) {
+        tokenStore.save(await response.json() as Tokens)
+        return true
+      }
+      // Another tab may have rotated it a moment ago and saved the result to shared storage.
+      return tokenStore.refreshToken !== refreshToken
+    } catch {
+      return false
+    }
+  })().finally(() => { refreshing = null })
+  return refreshing
+}
+
 async function request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(init.headers)
   if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
-  if (tokenStore.accessToken) headers.set('Authorization', `Bearer ${tokenStore.accessToken}`)
+  const usedToken = tokenStore.accessToken
+  if (usedToken) headers.set('Authorization', `Bearer ${usedToken}`)
 
   let response: Response
   try {
@@ -60,17 +90,12 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
   } catch {
     throw new ApiError("We couldn't reach TruvoID. Check your connection and try again.", 0)
   }
-  if (response.status === 401 && retry && tokenStore.refreshToken && tokenStore.accessToken) {
-    const refresh = await fetch(`${API_BASE_URL}/v1/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ oldAccessToken: tokenStore.accessToken, refreshToken: tokenStore.refreshToken }),
-    })
-    if (refresh.ok) {
-      tokenStore.save(await refresh.json() as Tokens)
-      return request<T>(path, init, false)
-    }
+  if (response.status === 401 && retry && usedToken) {
+    // Someone else already refreshed while this request was in flight: just retry.
+    if (tokenStore.accessToken && tokenStore.accessToken !== usedToken) return request<T>(path, init, false)
+    if (await refreshSession()) return request<T>(path, init, false)
     tokenStore.clear()
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
   }
 
   if (!response.ok) {
@@ -98,4 +123,15 @@ export const api = {
     body: JSON.stringify({ email, password }),
   }),
   profile: () => request<AuthProfile>('/v1/auth/me'),
+  /** Revokes this session server-side, then forgets the tokens. Never throws. */
+  logout: async () => {
+    const refreshToken = tokenStore.refreshToken
+    tokenStore.clear()
+    if (refreshToken)
+      await fetch(`${API_BASE_URL}/v1/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      }).catch(() => undefined)
+  },
 }
