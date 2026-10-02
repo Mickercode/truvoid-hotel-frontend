@@ -161,6 +161,7 @@ builder.Services.AddSingleton<TenantConnectionFactory>(sp => new TenantConnectio
     postgresConnectionString,
     sp.GetRequiredService<TenantCredentialProtector>()));
 builder.Services.AddScoped<ControlPlaneIdentityStore>();
+builder.Services.AddSingleton<PasswordResetStore>();
 builder.Services.AddSingleton(sp => new RefreshTokenStore(
     sp.GetRequiredService<NpgsqlDataSource>(),
     TimeSpan.FromDays(builder.Configuration.GetValue("Jwt:RefreshDays", 30))));

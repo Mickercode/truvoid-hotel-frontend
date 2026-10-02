@@ -20,6 +20,7 @@ public static class EndpointRegistration
         app.MapTenantVerificationHistoryEndpoints();
         app.MapTenantTeamEndpoints();
         app.MapPricingEndpoints();
+        app.MapPasswordResetEndpoints();
 
         return app;
     }

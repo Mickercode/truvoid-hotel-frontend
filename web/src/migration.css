@@ -259,3 +259,4 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sandbox-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 52px; border-bottom: 1px solid #8a6d2b; background: repeating-linear-gradient(135deg, #1f1a0d 0 14px, #1b170c 14px 28px); color: #e8d29a; font-size: 12px; }
 .sandbox-banner strong { color: #f1ce70; font: 11px 'DM Mono', monospace; letter-spacing: .12em; }
 @media (max-width: 760px) { .sandbox-banner { padding: 10px 22px; } }
+.forgot-link { justify-self: end; margin-top: -8px; color: var(--cyan); font-size: 12px; }

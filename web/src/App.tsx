@@ -18,7 +18,7 @@ import { AboutPage } from "./AboutPage";
 import { VerifyPage } from "./VerifyPage";
 import { VerificationHistoryPage } from "./VerificationHistoryPage";
 import { TeamPage } from "./TeamPage";
-import { AcceptInvite, Login, Register } from "./AuthScreens";
+import { AcceptInvite, ForgotPassword, Login, Register, ResetPassword } from "./AuthScreens";
 import { PricingPage } from "./PricingPage";
 import { useEnvironment } from "./useEnvironment";
 
@@ -694,6 +694,8 @@ export function App() {
       <Route path="/register" element={<Register onLogin={setProfile} Frame={AuthFrame} />} />
       <Route path="/accept-agency-invite" element={<AcceptInvite kind="agency" Frame={AuthFrame} />} />
       <Route path="/accept-team-invite" element={<AcceptInvite kind="team" Frame={AuthFrame} />} />
+      <Route path="/forgot-password" element={<ForgotPassword Frame={AuthFrame} />} />
+      <Route path="/reset-password" element={<ResetPassword Frame={AuthFrame} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

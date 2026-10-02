@@ -66,6 +66,7 @@ export function Login({ onLogin, Frame }: { onLogin: (profile: AuthProfile) => v
             <PasswordField label="Password" autoComplete="current-password" autoFocus={!!message}
               value={password} error={errors.password}
               onChange={(e) => { setPassword(e.target.value); if (errors.password) setErrors({ ...errors, password: null }) }} />
+            <Link className="forgot-link" to="/forgot-password">Forgot password?</Link>
             <FormNotice message={message} />
             <SubmitButton>Sign in ↗</SubmitButton>
           </form>
@@ -297,6 +298,120 @@ export function AcceptInvite({ kind, Frame }: { kind: 'agency' | 'team'; Frame: 
           <div className="notice success" role="status">You're all set. Taking you to sign in…</div>
           <Link className="button button-primary auth-submit" to="/login">Sign in now ↗</Link>
         </div>
+      )}
+    </Frame>
+  )
+}
+
+// ── Forgot / reset password ─────────────────────────────────────────────────
+
+export function ForgotPassword({ Frame }: { Frame: Frame }) {
+  const [email, setEmail] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [sent, setSent] = useState<string | null>(null)
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    const invalid = validateEmail(email)
+    setError(invalid)
+    setMessage('')
+    if (invalid) return
+    setBusy(true)
+    try {
+      const result = await api.post<{ message: string }>('/v1/auth/forgot-password', { email: email.trim() })
+      setSent(result.message)
+    } catch (reason) {
+      setMessage(messageOf(reason, 'We could not send the reset link. Please try again.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Frame eyebrow="ACCOUNT RECOVERY" title={<>Reset your<br /><span className="gradient-text">password.</span></>}>
+      {sent ? (
+        <div className="auth-progress">
+          <div className="notice success" role="status">{sent}</div>
+          <p className="field-hint">Didn't get it? Check spam, or <button type="button" className="link-button" onClick={() => setSent(null)}>try again</button>.</p>
+          <Link className="button button-primary auth-submit" to="/login">Back to sign in</Link>
+        </div>
+      ) : (
+        <>
+          <p className="lede">Enter the email you sign in with and we'll send you a link to choose a new password.</p>
+          <form onSubmit={submit} noValidate>
+            <FormField label="Email address" type="email" autoComplete="email" autoFocus value={email} error={error}
+              onChange={(e) => { setEmail(e.target.value); if (error) setError(null) }} />
+            <FormNotice message={message} />
+            <SubmitButton busy={busy} busyLabel="Sending link…">Send reset link ↗</SubmitButton>
+          </form>
+          <div className="auth-foot"><Link to="/login">Back to sign in</Link></div>
+        </>
+      )}
+    </Frame>
+  )
+}
+
+export function ResetPassword({ Frame }: { Frame: Frame }) {
+  const [params] = useSearchParams()
+  const navigate = useNavigate()
+  const token = params.get('token') ?? ''
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [errors, setErrors] = useState<{ password?: string | null; confirm?: string | null }>({})
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState(false)
+
+  useEffect(() => {
+    if (!done) return
+    const timer = setTimeout(() => navigate('/login'), 3000)
+    return () => clearTimeout(timer)
+  }, [done, navigate])
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    const found = { password: validatePassword(password), confirm: confirm === password ? null : "Passwords don't match." }
+    setErrors(found)
+    setMessage('')
+    if (found.password || found.confirm) return
+    setBusy(true)
+    try {
+      await api.post('/v1/auth/reset-password', { token, password })
+      tokenStore.clear() // any session on this device belonged to the old password
+      setDone(true)
+    } catch (reason) {
+      setMessage(messageOf(reason, 'Your password could not be reset.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Frame eyebrow="ACCOUNT RECOVERY" title={<>Choose a new<br /><span className="gradient-text">password.</span></>}>
+      {!token ? (
+        <div className="auth-progress">
+          <div className="notice error" role="alert">This reset link is incomplete. Open the link from your email again, or request a new one.</div>
+          <Link className="button button-primary auth-submit" to="/forgot-password">Request a new link</Link>
+        </div>
+      ) : done ? (
+        <div className="auth-progress">
+          <div className="notice success" role="status">Your password has been reset. You've been signed out everywhere; taking you to sign in…</div>
+          <Link className="button button-primary auth-submit" to="/login">Sign in now ↗</Link>
+        </div>
+      ) : (
+        <>
+          <form onSubmit={submit} noValidate>
+            <PasswordField label="New password" autoComplete="new-password" autoFocus showStrength value={password}
+              error={errors.password} hint="At least 8 characters, with a letter and a number."
+              onChange={(e) => setPassword(e.target.value)} />
+            <PasswordField label="Confirm new password" autoComplete="new-password" value={confirm}
+              error={errors.confirm} onChange={(e) => setConfirm(e.target.value)} />
+            {message && <div className="notice error" role="alert">{message} {message.includes('Request a new one') && <Link className="text-link" to="/forgot-password">Request a new link →</Link>}</div>}
+            <SubmitButton busy={busy} busyLabel="Saving…">Set new password ↗</SubmitButton>
+          </form>
+        </>
       )}
     </Frame>
   )
