@@ -15,7 +15,8 @@ var builder = WebApplication.CreateBuilder(args);
 // ── Postgres admin commands ────────────────────────────────────────────────
 // `dotnet TruvoID.API.dll migrate`           control plane + every tenant schema
 // `dotnet TruvoID.API.dll provision-tenants` create schema + role for pending Organizations
-// `dotnet TruvoID.API.dll worker`            loop: provision-tenants + relay-revenue every few seconds
+// `dotnet TruvoID.API.dll worker`            loop: provision-tenants + relay-revenue every few seconds,
+//                                            and refund stale pending verifications every few minutes
 // `dotnet TruvoID.API.dll create-platform-admin <email> [full name] [--reset-password]`
 // All run with the DDL-owning migrator role as separate processes, so the running
 // API only ever holds DML-only credentials.
@@ -78,6 +79,16 @@ if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue"
         var provisioner = new TenantProvisioner(migratorConnectionString, CreateTenantCredentialProtector(builder.Configuration), logger);
         var relay = new RevenueOutboxRelay(migratorConnectionString);
 
+        // Stale-call refunds touch tenant data, so they go through each Organization's own
+        // least-privilege role (the factory swaps the migrator's credentials for the tenant's).
+        await using var controlPlane = NpgsqlDataSource.Create(migratorConnectionString);
+        await using var workerTenants = new TenantConnectionFactory(
+            controlPlane, migratorConnectionString, CreateTenantCredentialProtector(builder.Configuration));
+        var sweeper = new VerificationSweeper(
+            controlPlane, workerTenants, new TenantVerificationService(controlPlane, new TenantWalletService()), logger);
+        var sweepEvery = TimeSpan.FromMinutes(builder.Configuration.GetValue("Worker:SweepMinutes", 5));
+        var nextSweep = DateTime.UtcNow;
+
         using var stopping = new CancellationTokenSource();
         using var sigterm = System.Runtime.InteropServices.PosixSignalRegistration.Create(
             System.Runtime.InteropServices.PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; stopping.Cancel(); });
@@ -95,6 +106,14 @@ if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue"
                 var delivered = await relay.RelayAsync(stopping.Token);
                 if (delivered > 0)
                     logger.LogInformation("Delivered {Count} revenue event(s).", delivered);
+
+                if (DateTime.UtcNow >= nextSweep)
+                {
+                    nextSweep = DateTime.UtcNow + sweepEvery;
+                    var swept = await sweeper.SweepAsync(stopping.Token);
+                    if (swept > 0)
+                        logger.LogWarning("Refunded {Count} stale verification call(s).", swept);
+                }
             }
             catch (OperationCanceledException) when (stopping.IsCancellationRequested)
             {
