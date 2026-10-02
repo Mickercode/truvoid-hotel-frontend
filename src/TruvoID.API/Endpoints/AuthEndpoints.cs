@@ -20,19 +20,19 @@ public static class AuthEndpoints
         var authGroup = app.MapGroup("/v1/auth");
 
         authGroup.MapPost("/register", Register)
-            .AllowAnonymous();
+            .AllowAnonymous().RequireRateLimiting("auth");
 
         authGroup.MapPost("/login", Login)
-            .AllowAnonymous();
+            .AllowAnonymous().RequireRateLimiting("auth");
 
         authGroup.MapPost("/refresh", RefreshToken)
-            .AllowAnonymous();
+            .AllowAnonymous().RequireRateLimiting("auth");
 
         authGroup.MapGet("/me", GetCurrentUser)
             .RequireAuthorization();
 
         authGroup.MapPost("/change-password", ChangePassword)
-            .RequireAuthorization();
+            .RequireAuthorization().RequireRateLimiting("auth");
 
         authGroup.MapPost("/deactivate", DeactivateAccount)
             .RequireAuthorization();

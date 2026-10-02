@@ -18,7 +18,7 @@ public static class AgencyInvitationEndpoints
         app.MapPost("/v1/admin/agencies/invite", InviteAgency)
             .RequireAuthorization("TruvoAdmin");
         app.MapPost("/v1/auth/agency-invitations/accept", AcceptInvitation)
-            .AllowAnonymous();
+            .AllowAnonymous().RequireRateLimiting("auth");
         return app;
     }
 

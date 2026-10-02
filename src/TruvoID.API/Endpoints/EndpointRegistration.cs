@@ -19,6 +19,7 @@ public static class EndpointRegistration
         app.MapTenantVerificationEndpoints();
         app.MapTenantVerificationHistoryEndpoints();
         app.MapTenantTeamEndpoints();
+        app.MapPricingEndpoints();
 
         return app;
     }

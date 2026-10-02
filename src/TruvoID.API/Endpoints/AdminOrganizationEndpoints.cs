@@ -35,11 +35,21 @@ public static class AdminOrganizationEndpoints
 
     private static async Task<IResult> SetStatus(Guid id, string status, NpgsqlDataSource db, CancellationToken ct)
     {
-        await using var command = db.CreateCommand("UPDATE control.organization SET status = @status, updated_at = now() WHERE id = @id");
+        // Only active <-> suspended. Reactivating a 'pending' Organization would mark it
+        // active before the worker has created its schema, breaking it permanently.
+        var from = status == "suspended" ? "active" : "suspended";
+        await using var command = db.CreateCommand(
+            "UPDATE control.organization SET status = @status, updated_at = now() WHERE id = @id AND status = @from RETURNING id");
         command.Parameters.AddWithValue("status", status);
+        command.Parameters.AddWithValue("from", from);
         command.Parameters.AddWithValue("id", id);
-        return await command.ExecuteNonQueryAsync(ct) == 1
-            ? Results.Ok(new { message = $"Organization {status}." })
+        if (await command.ExecuteScalarAsync(ct) is not null)
+            return Results.Ok(new { message = $"Organization {status}." });
+
+        await using var exists = db.CreateCommand("SELECT status FROM control.organization WHERE id = @id");
+        exists.Parameters.AddWithValue("id", id);
+        return await exists.ExecuteScalarAsync(ct) is string current
+            ? Results.Conflict(new { error = $"Only {from} organizations can be {status}; this one is {current}." })
             : Results.NotFound(new { error = "Organization not found." });
     }
 

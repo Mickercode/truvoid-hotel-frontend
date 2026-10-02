@@ -230,6 +230,36 @@ builder.Services.AddCors(options =>
         .AllowAnyMethod());
 });
 
+// ── Rate limiting ─────────────────────────────────────────────────────────
+// "auth": per client IP on credential endpoints (brute force / credential stuffing).
+// Generous by default because Nigerian mobile carriers put many users behind one IP.
+// "verify": per API key (or Organization) so a leaked key can't drain a wallet at line rate.
+var authPerMinute = builder.Configuration.GetValue("RateLimits:AuthPerMinute", 20);
+var verifyPerMinute = builder.Configuration.GetValue("RateLimits:VerifyPerMinute", 120);
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, ct) =>
+    {
+        if (context.Lease.TryGetMetadata(System.Threading.RateLimiting.MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter = ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString();
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { error = "Too many attempts. Please wait a moment and try again.", code = "rate_limited" }, ct);
+    };
+    options.AddPolicy("auth", http => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+        ClientIp(http), _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+        {
+            PermitLimit = authPerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
+        }));
+    options.AddPolicy("verify", http => System.Threading.RateLimiting.RateLimitPartition.GetTokenBucketLimiter(
+        http.User.FindFirst("api_key_id")?.Value ?? http.User.FindFirst("organization_id")?.Value ?? ClientIp(http),
+        _ => new System.Threading.RateLimiting.TokenBucketRateLimiterOptions
+        {
+            TokenLimit = verifyPerMinute, TokensPerPeriod = verifyPerMinute,
+            ReplenishmentPeriod = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true,
+        }));
+});
+
 // ── Application services ──────────────────────────────────────────────────
 builder.Services.AddScoped<IAuditService, PostgresAuditService>();
 
@@ -278,6 +308,7 @@ app.UseRouting();
 app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter(); // after auth so the "verify" policy can partition by API key / Organization
 
 var identityProvider = app.Services.GetRequiredService<IIdentityProvider>();
 if (!identityProvider.IsConfigured)
@@ -289,6 +320,14 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", environment = identi
 app.MapTruvoIdEndpoints();
 
 app.Run();
+
+// Behind Cloudflare → Railway's edge, RemoteIpAddress is the proxy. Cloudflare's header is
+// set by Cloudflare itself; X-Forwarded-For's first hop is the client per Railway's edge.
+static string ClientIp(HttpContext http) =>
+    http.Request.Headers["CF-Connecting-IP"].FirstOrDefault()
+    ?? http.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
+    ?? http.Connection.RemoteIpAddress?.ToString()
+    ?? "unknown";
 
 // Railway (and most hosts) hand out postgres:// URLs, which Npgsql rejects —
 // NpgsqlDataSource.Create then throws on first use and every DB-backed endpoint

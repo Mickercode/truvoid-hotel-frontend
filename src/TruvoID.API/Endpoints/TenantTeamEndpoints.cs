@@ -21,7 +21,7 @@ public static class TenantTeamEndpoints
         group.MapPost("/{userId:guid}/disable", Disable);
         group.MapPost("/{userId:guid}/reactivate", Reactivate);
         group.MapPut("/{userId:guid}/role", ChangeRole);
-        app.MapPost("/v1/auth/team-invitations/accept", Accept).AllowAnonymous();
+        app.MapPost("/v1/auth/team-invitations/accept", Accept).AllowAnonymous().RequireRateLimiting("auth");
         return app;
     }
 

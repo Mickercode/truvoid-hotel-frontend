@@ -17,7 +17,8 @@ public static class TenantVerificationEndpoints
         app.MapPost("/v1/verify/{type}", Verify)
             .RequireAuthorization(policy => policy
                 .AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme, ApiKeyAuthenticationHandler.SchemeName)
-                .RequireAuthenticatedUser());
+                .RequireAuthenticatedUser())
+            .RequireRateLimiting("verify");
 
         // Sandbox discoverability: lets integrators fetch the test numbers programmatically.
         app.MapGet("/v1/verify/test-numbers", (VerificationRunner runner) => runner.Environment == "sandbox"

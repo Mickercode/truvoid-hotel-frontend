@@ -30,18 +30,6 @@
     <Compile Remove="TruvoID.Infrastructure/bin/**/*.cs" />
     <Compile Remove="TruvoID.Infrastructure/Migrations/**/*.cs" />
     <!-- Legacy MongoDB application is retired; only PostgreSQL tenant code ships. -->
-    <Compile Remove="Endpoints/AdminApprovalEndpoints.cs" />
-    <Compile Remove="Endpoints/CallHistoryEndpoints.cs" />
-    <Compile Remove="Endpoints/InstitutionEndpoints.cs" />
-    <Compile Remove="Endpoints/NotificationEndpoints.cs" />
-    <Compile Remove="Endpoints/NotificationFeedEndpoints.cs" />
-    <Compile Remove="Endpoints/OnboardingEndpoints.cs" />
-    <Compile Remove="Endpoints/PasswordResetEndpoints.cs" />
-    <Compile Remove="Endpoints/PricingEndpoints.cs" />
-    <Compile Remove="Endpoints/VerificationEndpoints.cs" />
-    <Compile Remove="Endpoints/WalletEndpoints.cs" />
-    <Compile Remove="Endpoints/WalletAlertEndpoints.cs" />
-    <Compile Remove="Endpoints/RegistrationEmailHook.cs" />
     <Compile Remove="TruvoID.Domain/Entities/**/*.cs" />
     <Compile Remove="TruvoID.Infrastructure/Data/**/*.cs" />
     <Compile Remove="TruvoID.Infrastructure/Extensions/**/*.cs" />

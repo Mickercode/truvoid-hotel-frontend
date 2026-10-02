@@ -244,3 +244,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .form-card .auth-field input { width: 100%; padding: 13px 14px; border: 1px solid var(--line); outline: 0; background: #0d1118; color: #eef2f8; font: 15px 'DM Mono', monospace; letter-spacing: .04em; }
 .form-card .auth-field input:focus { border-color: var(--cyan); }
 .form-card .auth-field.invalid input { border-color: #a44f4f; background: #1a1214; }
+
+/* ── Admin pricing ───────────────────────────────────────────────────────── */
+.pricing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+.pricing-card { max-width: none; align-content: start; }
+.pricing-head { display: flex; justify-content: space-between; align-items: start; }
+.pricing-head h2 { margin: 8px 0 0; font-size: 20px; }
+.pricing-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.margin { margin: 0; color: var(--lime); font: 12px 'DM Mono', monospace; }
+.margin.negative { color: #ff9d9d; }
+.price-tag { margin-left: 10px; padding: 2px 7px; background: #0a111233; border: 1px solid #0a111244; font: 12px 'DM Mono', monospace; }

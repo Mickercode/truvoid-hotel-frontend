@@ -19,6 +19,7 @@ import { VerifyPage } from "./VerifyPage";
 import { VerificationHistoryPage } from "./VerificationHistoryPage";
 import { TeamPage } from "./TeamPage";
 import { AcceptInvite, Login, Register } from "./AuthScreens";
+import { PricingPage } from "./PricingPage";
 
 type Json = Record<string, unknown>;
 function Field({
@@ -170,16 +171,19 @@ function Shell({
           <>
             <div className="workspace-label admin-label">ADMIN</div>
             <nav>
-              <Link
-                className={
-                  location.pathname === "/admin/agencies"
-                    ? "nav-link admin-active"
-                    : "nav-link"
-                }
-                to="/admin/agencies"
-              >
-                <span className="nav-index">A</span>Organizations
-              </Link>
+              {[
+                ["/admin/agencies", "A", "Organizations"],
+                ["/admin/pricing", "P", "Pricing"],
+              ].map(([path, index, label]) => (
+                <Link
+                  key={path}
+                  className={location.pathname === path ? "nav-link admin-active" : "nav-link"}
+                  to={path}
+                >
+                  <span className="nav-index">{index}</span>
+                  {label}
+                </Link>
+              ))}
             </nav>
           </>
         )}
@@ -223,6 +227,7 @@ function Shell({
             {isAdmin && (
               <Route path="/admin/agencies" element={<InviteAgency />} />
             )}
+            {isAdmin && <Route path="/admin/pricing" element={<PricingPage />} />}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>

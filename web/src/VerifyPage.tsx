@@ -39,10 +39,14 @@ export function VerifyPage() {
   const [busy, setBusy] = useState(false)
   const [testNumbers, setTestNumbers] = useState<TestNumbers | null>(null)
   const [historyKey, setHistoryKey] = useState(0)
+  const [prices, setPrices] = useState<Record<string, number | null>>({})
 
   useEffect(() => {
     // Only the sandbox serves test numbers; a 404 simply means "live".
     api.get<TestNumbers>('/v1/verify/test-numbers').then(setTestNumbers).catch(() => setTestNumbers(null))
+    api.get<{ type: string; priceKobo: number | null }[]>('/v1/tenant/pricing')
+      .then((rates) => setPrices(Object.fromEntries(rates.map((r) => [r.type, r.priceKobo]))))
+      .catch(() => setPrices({}))
   }, [])
 
   async function submit(event: FormEvent) {
@@ -86,7 +90,9 @@ export function VerifyPage() {
             placeholder={type === 'phone' ? '08031234567' : '11-digit number'}
             hint={type === 'phone' ? 'Local (080…) or international (+234…) format.' : undefined}
             onChange={(e) => { setNumber(e.target.value); if (fieldError) setFieldError(null) }} />
-          <SubmitButton busy={busy} busyLabel="Checking the registry…">Verify {LABELS[type]} ↗</SubmitButton>
+          <SubmitButton busy={busy} busyLabel="Checking the registry…">
+            Verify {LABELS[type]}{prices[type] != null && <span className="price-tag">{naira(prices[type]!)}</span>} ↗
+          </SubmitButton>
         </form>
         {error && <div className="notice error" role="alert">
           {error.message} {error.walletLink && <Link className="text-link" to="/wallet">Fund wallet →</Link>}
