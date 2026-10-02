@@ -159,9 +159,12 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization(options =>
 {
+    // Platform staff only. Must NOT include "Admin": that is the legacy claim every
+    // institution_admin / agency_admin carries, so any self-registered Organization
+    // would otherwise reach /v1/admin/* (list all orgs, credit its own wallet, ...).
     options.AddPolicy("TruvoAdmin", policy =>
         policy.RequireAuthenticatedUser()
-              .RequireRole("Admin", "SuperAdmin", "PlatformAdmin", "platform_admin"));
+              .RequireRole("PlatformAdmin", "platform_admin"));
     options.AddPolicy("TenantManager", policy =>
         policy.RequireAuthenticatedUser()
               .RequireRole("Admin", "institution_admin", "agency_admin", "agency_user"));
