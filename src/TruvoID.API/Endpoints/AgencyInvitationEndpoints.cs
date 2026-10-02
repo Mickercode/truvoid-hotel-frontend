@@ -29,6 +29,7 @@ public static class AgencyInvitationEndpoints
         IAuditService audit,
         IEmailService email,
         ILoggerFactory loggerFactory,
+        IConfiguration configuration,
         CancellationToken ct)
     {
         try
@@ -45,7 +46,7 @@ public static class AgencyInvitationEndpoints
                 ct);
             await audit.LogAsync(AuditAction.Created, "AgencyInvitation", invitation.InvitationId,
                 ctx.GetUserId(), "User", request.AgencyName, ct);
-            var inviteUrl = $"https://gettruvoid.com/accept-agency-invite?token={rawToken}";
+            var inviteUrl = AppLinks.Build(configuration, $"accept-agency-invite?token={rawToken}");
             try
             {
                 await email.SendAsync(request.AdminEmail, request.AdminFullName, $"You're invited to administer {request.AgencyName} on TruvoID", EmailTemplates.StaffInvitation(request.AgencyName, "TruvoID Platform", "Agency administrator", inviteUrl));

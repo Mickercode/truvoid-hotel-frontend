@@ -33,7 +33,7 @@ public static class TenantTeamEndpoints
         return Results.Ok(await identities.ListTeamAsync(ctx.GetOrganizationId(), ct));
     }
 
-    private static async Task<IResult> Invite(HttpContext ctx, InviteTeamMemberRequest request, ControlPlaneIdentityStore identities, TenantConnectionFactory tenants, IAuditService audit, IEmailService email, ILoggerFactory loggerFactory, CancellationToken ct)
+    private static async Task<IResult> Invite(HttpContext ctx, InviteTeamMemberRequest request, ControlPlaneIdentityStore identities, TenantConnectionFactory tenants, IAuditService audit, IEmailService email, ILoggerFactory loggerFactory, IConfiguration configuration, CancellationToken ct)
     {
         if (!IsAdmin(ctx)) return Results.Forbid();
         var allowed = ctx.User.FindFirst("tenant_role")?.Value == "agency_admin"
@@ -55,7 +55,7 @@ public static class TenantTeamEndpoints
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken))).ToLowerInvariant();
         var invitation = await identities.InviteUserAsync(ctx.GetOrganizationId(), request.Email, request.FullName, request.Role.ToLowerInvariant(), request.OutletId, ctx.GetUserId(), hash, DateTime.UtcNow.AddDays(7), ct);
         await audit.LogAsync(AuditAction.Created, "TeamInvitation", invitation.InvitationId, ctx.GetUserId(), "User", request.Email, ct);
-        var inviteUrl = $"https://gettruvoid.com/accept-team-invite?token={rawToken}";
+        var inviteUrl = AppLinks.Build(configuration, $"accept-team-invite?token={rawToken}");
         try
         {
             var inviterName = ctx.User.Identity?.Name ?? "Your workspace administrator";

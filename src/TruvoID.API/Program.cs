@@ -15,9 +15,10 @@ var builder = WebApplication.CreateBuilder(args);
 // `dotnet TruvoID.API.dll migrate`           control plane + every tenant schema
 // `dotnet TruvoID.API.dll provision-tenants` create schema + role for pending Organizations
 // `dotnet TruvoID.API.dll worker`            loop: provision-tenants + relay-revenue every few seconds
+// `dotnet TruvoID.API.dll create-platform-admin <email> [full name] [--reset-password]`
 // All run with the DDL-owning migrator role as separate processes, so the running
 // API only ever holds DML-only credentials.
-if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue" or "worker")
+if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue" or "worker" or "create-platform-admin")
 {
     var migratorConnectionString = NormalizePostgresConnectionString(
         builder.Configuration.GetConnectionString("PostgresMigrator")
@@ -39,6 +40,34 @@ if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue"
         var provisioner = new TenantProvisioner(migratorConnectionString, CreateTenantCredentialProtector(builder.Configuration), logger);
         var provisioned = await provisioner.ProvisionPendingAsync();
         Console.WriteLine($"Provisioned {provisioned} Organization(s).");
+    }
+    else if (args[0] == "create-platform-admin")
+    {
+        var reset = args.Contains("--reset-password");
+        var positional = args.Skip(1).Where(a => !a.StartsWith("--")).ToArray();
+        if (positional.Length == 0)
+        {
+            Console.Error.WriteLine("Usage: create-platform-admin <email> [full name] [--reset-password]");
+            Environment.ExitCode = 2;
+            return;
+        }
+
+        var bootstrapper = new PlatformAdminBootstrapper(migratorConnectionString);
+        try
+        {
+            var result = reset
+                ? await bootstrapper.ResetPasswordAsync(positional[0])
+                : await bootstrapper.CreateAsync(positional[0], string.Join(' ', positional.Skip(1)));
+            Console.WriteLine(result.Created ? "Platform admin created." : "Platform admin password reset.");
+            Console.WriteLine($"  Email:    {result.Email}");
+            Console.WriteLine($"  Password: {result.Password}");
+            Console.WriteLine("This password is shown once. Sign in and change it immediately.");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            Environment.ExitCode = 1;
+        }
     }
     else if (args[0] == "worker")
     {
