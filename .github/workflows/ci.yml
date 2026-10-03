@@ -1,0 +1,82 @@
+name: CI
+
+# Runs on every push and pull request to master, in both mirrors of this repo
+# (truvoid-hotel-backend → Railway, truvoid-hotel-frontend → Vercel).
+# Turn on Railway's "Wait for CI" for the API and worker services so a red build
+# never deploys.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API — build & tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: |
+          dotnet restore src/TruvoID.API/TruvoID.API.csproj
+          dotnet restore tests/TruvoID.Tests/TruvoID.Tests.csproj
+
+      # Warnings stay warnings for now; the build must compile cleanly.
+      - name: Build API
+        run: dotnet build src/TruvoID.API/TruvoID.API.csproj --configuration Release --no-restore
+
+      # Includes the Postgres tests (tenant isolation, RLS, money paths) via
+      # Testcontainers — ubuntu-latest has Docker.
+      - name: Test
+        run: >
+          dotnet test tests/TruvoID.Tests/TruvoID.Tests.csproj
+          --configuration Release
+          --logger "trx;LogFileName=results.trx"
+          --results-directory test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-results
+          path: test-results
+          retention-days: 14
+
+  web:
+    name: Web — type-check & build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # npm ci installs exactly what package-lock.json pins (package.json uses "latest").
+      - run: npm ci
+
+      - name: Type-check & build
+        run: npm run build
+
+      - name: Docs page is part of the build
+        run: test -f dist/api-docs.html
