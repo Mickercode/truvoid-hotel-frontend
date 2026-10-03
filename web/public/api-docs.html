@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TruvoID API reference</title>
+<meta name="description" content="Integrate NIN, BVN and phone verification with the TruvoID API: authentication, test mode, endpoints, errors and code samples." />
+<link rel="icon" type="image/png" href="/TruvoID-logo.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root { --bg: #071018; --panel: #0d1b24; --panel2: #0a151d; --line: rgba(152,196,202,.16); --text: #edf7f4; --muted: #9ab3b5; --cyan: #72e6c2; --gold: #e9b65b; --red: #ff9b9b; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+  body { margin: 0; background: radial-gradient(circle at 85% -10%, rgba(114,230,194,.12), transparent 34rem), var(--bg); color: var(--text); font: 15px/1.65 'Space Grotesk', system-ui, sans-serif; }
+  a { color: var(--cyan); text-decoration: none; } a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace; }
+  .layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); max-width: 1240px; margin: 0 auto; }
+  nav.toc { position: sticky; top: 0; align-self: start; height: 100vh; overflow: auto; padding: 28px 22px; border-right: 1px solid var(--line); }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 600; font-size: 18px; letter-spacing: -.03em; margin-bottom: 26px; }
+  .brand img { width: 26px; height: 26px; }
+  .toc h4 { margin: 22px 0 8px; color: var(--muted); font: 500 10px 'JetBrains Mono', monospace; letter-spacing: .14em; }
+  .toc a { display: block; padding: 5px 0 5px 10px; border-left: 1px solid transparent; color: #c9d8d8; font-size: 13.5px; }
+  .toc a:hover { color: var(--cyan); border-left-color: var(--cyan); text-decoration: none; }
+  main { padding: 48px clamp(20px, 5vw, 64px) 120px; min-width: 0; }
+  .kicker { color: var(--gold); font: 500 11px 'JetBrains Mono', monospace; letter-spacing: .16em; }
+  h1 { margin: 14px 0 12px; font-size: clamp(38px, 5vw, 58px); line-height: 1; letter-spacing: -.05em; }
+  h2 { margin: 72px 0 12px; padding-top: 8px; font-size: 28px; letter-spacing: -.03em; border-top: 1px solid var(--line); padding-top: 40px; }
+  h3 { margin: 32px 0 10px; font-size: 18px; }
+  p, li { color: #c3d4d3; } .lede { color: var(--muted); font-size: 17px; max-width: 720px; }
+  :not(pre) > code { padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel2); color: #a8f3dc; font-size: .86em; }
+  pre { margin: 14px 0; padding: 18px 20px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #061017; color: #d7efe8; font-size: 12.5px; line-height: 1.7; }
+  pre .c { color: #65848b; } pre .k { color: var(--gold); } pre .s { color: #9df4d9; }
+  .endpoint { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 18px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .method { padding: 3px 9px; border-radius: 5px; background: var(--cyan); color: #06231b; font: 700 11px 'JetBrains Mono', monospace; }
+  .method.get { background: #8fb7ff; color: #0b1830; }
+  .path { font: 500 14px 'JetBrains Mono', monospace; color: var(--text); }
+  .auth-tag { margin-left: auto; color: var(--muted); font: 11px 'JetBrains Mono', monospace; }
+  table { width: 100%; margin: 14px 0; border-collapse: collapse; font-size: 13.5px; }
+  th { color: var(--muted); font: 500 10.5px 'JetBrains Mono', monospace; letter-spacing: .08em; text-align: left; text-transform: uppercase; }
+  td, th { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td code { white-space: nowrap; }
+  .callout { margin: 18px 0; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--cyan); border-radius: 8px; background: var(--panel); }
+  .callout.gold { border-left-color: var(--gold); } .callout.red { border-left-color: var(--red); }
+  .callout p { margin: 4px 0; }
+  .tabs { margin: 14px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #061017; }
+  .tabs .bar { display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+  .tabs button { padding: 10px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); cursor: pointer; font: 11px 'JetBrains Mono', monospace; }
+  .tabs button.active { color: var(--text); border-bottom-color: var(--gold); }
+  .tabs pre { margin: 0; border: 0; border-radius: 0; }
+  .tabs pre[hidden] { display: none; }
+  .copy { float: right; margin: -6px -8px 0 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--muted); cursor: pointer; font: 10px 'JetBrains Mono', monospace; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .card { padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .card h3 { margin-top: 0; }
+  .badge { display: inline-block; padding: 1px 7px; border: 1px solid; border-radius: 4px; font: 10.5px 'JetBrains Mono', monospace; }
+  .badge.test { color: var(--gold); border-color: #8a6d2b; } .badge.live { color: var(--cyan); border-color: #2f6b5b; }
+  footer { margin-top: 80px; color: var(--muted); font-size: 13px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } nav.toc { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+  <a class="brand" href="/"><img src="/TruvoID-logo.png" alt="" />TruvoID API</a>
+  <h4>GET STARTED</h4>
+  <a href="#quickstart">Quick start</a>
+  <a href="#authentication">Authentication</a>
+  <a href="#test-mode">Test mode</a>
+  <a href="#going-live">Going live</a>
+  <h4>VERIFICATION</h4>
+  <a href="#verify">Verify NIN, BVN or phone</a>
+  <a href="#response">The response</a>
+  <a href="#idempotency">Idempotency</a>
+  <a href="#billing">Billing &amp; refunds</a>
+  <a href="#test-numbers">Test numbers endpoint</a>
+  <h4>REFERENCE</h4>
+  <a href="#errors">Errors</a>
+  <a href="#rate-limits">Rate limits</a>
+  <a href="#data">Data handling</a>
+  <a href="#outlets">Agencies &amp; outlets</a>
+  <a href="#samples">Code samples</a>
+</nav>
+
+<main>
+  <div class="kicker">API REFERENCE · v1</div>
+  <h1>Verify identities from your own systems.</h1>
+  <p class="lede">The TruvoID API lets your servers check a Nigerian NIN, BVN or phone number and get a clear answer in one request. Every workspace starts in free <a href="#test-mode">test mode</a>; live checks unlock once TruvoID approves your organization profile.</p>
+  <div class="callout"><p><strong>Base URL</strong> <code>https://api.gettruvoid.com</code> &nbsp;·&nbsp; JSON over HTTPS &nbsp;·&nbsp; amounts in <strong>kobo</strong> (₦1 = 100 kobo)</p></div>
+
+  <h2 id="quickstart">Quick start</h2>
+  <ol>
+    <li><a href="/register">Create a workspace</a> (free, no card needed).</li>
+    <li>In the dashboard, open <strong>API keys</strong> and generate a <span class="badge test">TEST</span> key. It starts with <code>trv_test_</code> and is shown once — store it as a secret.</li>
+    <li>Make your first call with a <a href="#test-mode">test number</a>:</li>
+  </ol>
+<pre><button class="copy">Copy</button>curl https://api.gettruvoid.com/v1/verify/nin \
+  -H "X-API-Key: $TRUVOID_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1042" \
+  -d '{"number": "00000000001"}'</pre>
+  <p>You'll get back a <code>match</code> with a sample identity. Test calls are free and never touch real identity records.</p>
+
+  <h2 id="authentication">Authentication</h2>
+  <p>Authenticate server-to-server requests with your API key in the <code>X-API-Key</code> header. Never put a key in a browser or mobile app — anyone can read it there.</p>
+  <table>
+    <tr><th>Key prefix</th><th>Mode</th><th>What it does</th></tr>
+    <tr><td><code>trv_test_…</code></td><td><span class="badge test">TEST</span></td><td>Free. Answers from test data only. Available immediately.</td></tr>
+    <tr><td><code>trv_live_…</code></td><td><span class="badge live">LIVE</span></td><td>Real lookups, charged to your wallet. Available once your profile is approved.</td></tr>
+  </table>
+  <p>The key decides the mode — you never pass a mode flag. Revoke a key from the dashboard at any time; it stops working immediately. A missing, unknown or revoked key returns <code>401</code>.</p>
+
+  <h2 id="test-mode">Test mode</h2>
+  <p>Test keys (and the dashboard's <strong>Test</strong> switch) run against a sandbox that behaves like the real service but returns fixed data. Use these numbers to exercise every outcome your integration must handle:</p>
+  <table>
+    <tr><th>Type</th><th>Match</th><th>No match</th><th>Provider error</th></tr>
+    <tr><td>NIN</td><td><code>00000000001</code></td><td><code>00000000002</code></td><td><code>00000000003</code></td></tr>
+    <tr><td>BVN</td><td><code>22222222221</code></td><td><code>22222222222</code></td><td><code>22222222223</code></td></tr>
+    <tr><td>Phone</td><td><code>08000000001</code></td><td><code>08000000002</code></td><td><code>08000000003</code></td></tr>
+  </table>
+  <p>Any other well-formed number returns <code>no_match</code> in test mode, so a real NIN pasted into test mode never appears to verify. Test responses carry <code>"environment": "sandbox"</code> and <code>"amountKobo": 0</code>.</p>
+
+  <h2 id="going-live">Going live</h2>
+  <div class="grid2">
+    <div class="card"><h3>1 · Complete your profile</h3><p>In the dashboard, fill in <strong>Organization setup</strong>, upload your supporting documents and submit.</p></div>
+    <div class="card"><h3>2 · TruvoID review</h3><p>We review your submission. If anything needs changing you'll see a note on your setup page; update and resubmit.</p></div>
+    <div class="card"><h3>3 · Live keys</h3><p>Once approved, generate a <code>trv_live_</code> key, fund your wallet and switch your production config to it.</p></div>
+  </div>
+  <p>Until approval, live requests and live-key creation return <code>403</code> with code <code>live_not_enabled</code>. Test mode keeps working throughout.</p>
+
+  <h2 id="verify">Verify a NIN, BVN or phone number</h2>
+  <div class="endpoint"><span class="method">POST</span><span class="path">/v1/verify/{type}</span><span class="auth-tag">X-API-Key</span></div>
+  <table>
+    <tr><th>Parameter</th><th>In</th><th>Description</th></tr>
+    <tr><td><code>type</code></td><td>path</td><td><code>nin</code>, <code>bvn</code> or <code>phone</code></td></tr>
+    <tr><td><code>number</code></td><td>body</td><td>NIN/BVN: exactly 11 digits. Phone: a Nigerian mobile number — <code>08031234567</code>, <code>+2348031234567</code> and <code>2348031234567</code> are all accepted. Spaces and dashes are ignored.</td></tr>
+    <tr><td><code>Idempotency-Key</code></td><td>header</td><td>Optional but strongly recommended — see <a href="#idempotency">Idempotency</a>. Up to 128 characters.</td></tr>
+  </table>
+  <p>Malformed numbers are rejected with <code>400</code> before anything is charged.</p>
+
+  <h2 id="response">The response</h2>
+  <p>A completed check returns <code>200</code> whether or not a record matched — read <code>status</code> to decide what to do.</p>
+<pre>{
+  <span class="k">"id"</span>: <span class="s">"d869cd79-52ea-461a-8b52-05444e7484b4"</span>,   <span class="c">// keep this reference</span>
+  <span class="k">"type"</span>: <span class="s">"nin"</span>,
+  <span class="k">"environment"</span>: <span class="s">"live"</span>,                       <span class="c">// "sandbox" in test mode</span>
+  <span class="k">"status"</span>: <span class="s">"match"</span>,                         <span class="c">// match | no_match | provider_error | pending</span>
+  <span class="k">"message"</span>: null,
+  <span class="k">"identity"</span>: {
+    <span class="k">"fullName"</span>: <span class="s">"ADAEZE CHIOMA OKAFOR"</span>,
+    <span class="k">"firstName"</span>: <span class="s">"ADAEZE"</span>, <span class="k">"middleName"</span>: <span class="s">"CHIOMA"</span>, <span class="k">"lastName"</span>: <span class="s">"OKAFOR"</span>,
+    <span class="k">"dateOfBirth"</span>: <span class="s">"14-02-1992"</span>,
+    <span class="k">"gender"</span>: <span class="s">"Female"</span>,
+    <span class="k">"phone"</span>: <span class="s">"08000000001"</span>,
+    <span class="k">"stateOfOrigin"</span>: <span class="s">"Anambra"</span>,
+    <span class="k">"residentialAddress"</span>: <span class="s">"12 SANDBOX CLOSE, VICTORIA ISLAND, LAGOS"</span>,
+    <span class="k">"photo"</span>: <span class="s">"data:image/jpeg;base64,…"</span>
+  },
+  <span class="k">"charge"</span>: { <span class="k">"amountKobo"</span>: 15000, <span class="k">"refunded"</span>: false },
+  <span class="k">"balanceAfterKobo"</span>: 485000,
+  <span class="k">"createdAt"</span>: <span class="s">"2026-10-03T09:41:12Z"</span>,
+  <span class="k">"replayed"</span>: false                          <span class="c">// true when answered from an earlier identical request</span>
+}</pre>
+  <table>
+    <tr><th>status</th><th>HTTP</th><th>Meaning</th><th>Charged?</th></tr>
+    <tr><td><code>match</code></td><td>200</td><td>A record exists; <code>identity</code> is populated.</td><td>Yes</td></tr>
+    <tr><td><code>no_match</code></td><td>200</td><td>The lookup ran, but no record matches. <code>identity</code> is <code>null</code>.</td><td>Yes — the lookup was performed</td></tr>
+    <tr><td><code>provider_error</code></td><td>502</td><td>The upstream identity provider failed or timed out. Safe to retry.</td><td>No — refunded in full</td></tr>
+    <tr><td><code>pending</code></td><td>202</td><td>An earlier request with the same Idempotency-Key is still running. Retry shortly with the same key.</td><td>Once, when it completes</td></tr>
+  </table>
+  <p>Fields inside <code>identity</code> depend on the verification type and what the record holds; treat every field as optional.</p>
+
+  <h2 id="idempotency">Idempotency</h2>
+  <p>Networks fail. Send a unique <code>Idempotency-Key</code> per logical check (an order or customer ID works well). If you retry with the same key, TruvoID returns the original answer with <code>"replayed": true</code> and <strong>does not charge again</strong>. Keys are scoped to your API key. Sending the same key while the first request is still in flight returns <code>409 idempotency_conflict</code>.</p>
+  <div class="callout gold"><p>Replayed answers include the identity fields kept in your history, but not the photo or residential address — those are returned only once (see <a href="#data">Data handling</a>).</p></div>
+
+  <h2 id="billing">Billing &amp; refunds</h2>
+  <ul>
+    <li>Live checks are prepaid from your wallet at your organization's price per type. Top up in the dashboard under <strong>Wallet</strong>.</li>
+    <li>The charge and the call record are written together: you're never charged without a record, or recorded without a charge.</li>
+    <li><code>provider_error</code> is refunded automatically. If a call is ever left incomplete (for example, a network failure on our side), it is refunded automatically within minutes.</li>
+    <li>With too little balance you get <code>402 insufficient_balance</code> and nothing is attempted.</li>
+    <li>Test-mode checks are always free.</li>
+  </ul>
+
+  <h2 id="test-numbers">Test numbers endpoint</h2>
+  <div class="endpoint"><span class="method get">GET</span><span class="path">/v1/verify/test-numbers</span><span class="auth-tag">no auth</span></div>
+  <p>Returns the test numbers above as JSON, so your test suite can stay in sync with them.</p>
+<pre>{ "nin": { "match": "00000000001", "noMatch": "00000000002", "providerError": "00000000003" }, "bvn": { … }, "phone": { … } }</pre>
+
+  <h2 id="errors">Errors</h2>
+  <p>Errors return a JSON body with a human-readable <code>error</code> and, where useful, a stable machine-readable <code>code</code>. Branch on <code>code</code>, not on the message text.</p>
+<pre>{ "error": "Your wallet balance is too low for this verification. Fund your wallet and try again.", "code": "insufficient_balance", "balanceKobo": 2000 }</pre>
+  <table>
+    <tr><th>HTTP</th><th>code</th><th>What to do</th></tr>
+    <tr><td>400</td><td><code>invalid_request</code></td><td>Fix the input (e.g. a NIN must be 11 digits). Nothing was charged.</td></tr>
+    <tr><td>401</td><td>—</td><td>Missing, unknown or revoked API key.</td></tr>
+    <tr><td>402</td><td><code>insufficient_balance</code></td><td>Fund your wallet. Nothing was charged.</td></tr>
+    <tr><td>403</td><td><code>live_not_enabled</code></td><td>Your organization isn't approved for live yet. Use a test key.</td></tr>
+    <tr><td>409</td><td><code>idempotency_conflict</code></td><td>The same Idempotency-Key is still in flight. Retry shortly.</td></tr>
+    <tr><td>409</td><td><code>workspace_not_ready</code></td><td>Your workspace is still being set up (seconds after signup) or is suspended.</td></tr>
+    <tr><td>429</td><td><code>rate_limited</code></td><td>Slow down; wait for the <code>Retry-After</code> seconds.</td></tr>
+    <tr><td>502</td><td>— (<code>status: provider_error</code>)</td><td>Upstream failure; refunded. Retry with backoff.</td></tr>
+    <tr><td>503</td><td><code>provider_unavailable</code></td><td>Verification is temporarily unavailable. Nothing was charged. Retry later.</td></tr>
+    <tr><td>503</td><td><code>pricing_not_configured</code></td><td>Contact TruvoID support. Nothing was charged.</td></tr>
+  </table>
+
+  <h2 id="rate-limits">Rate limits</h2>
+  <p>Each API key can make up to <strong>120 verification requests per minute</strong> (bursts allowed up to that limit). Beyond it you receive <code>429</code> with a <code>Retry-After</code> header. Need more? Contact us with your expected volume.</p>
+
+  <h2 id="data">Data handling</h2>
+  <ul>
+    <li>The number you verify is stored only as a one-way hash — your history shows a reference, never the NIN, BVN or phone number itself.</li>
+    <li>The <strong>photo</strong> and <strong>residential address</strong> are returned to you once, in the live response, and are not stored by TruvoID. Store them yourself only if you have a lawful basis to.</li>
+    <li>Name, date of birth, gender, phone and state of origin are kept in your verification history for reconciliation.</li>
+    <li>Use the data only for the purpose you collected consent for, in line with the Nigeria Data Protection Act (NDPA). TruvoID is an independent verification provider and is not NIMC or any government body.</li>
+  </ul>
+
+  <h2 id="outlets">Agencies &amp; outlets</h2>
+  <p>Agencies can issue keys per outlet. A request made with an outlet key is recorded against that outlet and, for agency outlets, charged to the outlet's own wallet (which the agency funds). Institution outlets share the institution's wallet. The API is identical either way — only the key differs.</p>
+
+  <h2 id="samples">Code samples</h2>
+  <div class="tabs" data-tabs>
+    <div class="bar"><button class="active" data-tab="node">Node.js</button><button data-tab="python">Python</button><button data-tab="csharp">C#</button><button data-tab="php">PHP</button></div>
+<pre data-panel="node"><button class="copy">Copy</button><span class="c">// Node 18+ (built-in fetch)</span>
+const res = await fetch('https://api.gettruvoid.com/v1/verify/nin', {
+  method: 'POST',
+  headers: {
+    'X-API-Key': process.env.TRUVOID_API_KEY,
+    'Content-Type': 'application/json',
+    'Idempotency-Key': `customer-${customerId}`,
+  },
+  body: JSON.stringify({ number: nin }),
+})
+const result = await res.json()
+if (res.status === 200 && result.status === 'match') {
+  console.log('Verified:', result.identity.fullName)
+} else if (res.status === 200) {
+  console.log('No matching record')
+} else {
+  console.error(result.code ?? result.status, result.error ?? result.message)
+}</pre>
+<pre data-panel="python" hidden><button class="copy">Copy</button>import os, requests
+
+res = requests.post(
+    "https://api.gettruvoid.com/v1/verify/nin",
+    headers={
+        "X-API-Key": os.environ["TRUVOID_API_KEY"],
+        "Idempotency-Key": f"customer-{customer_id}",
+    },
+    json={"number": nin},
+    timeout=40,
+)
+result = res.json()
+if res.status_code == 200 and result["status"] == "match":
+    print("Verified:", result["identity"]["fullName"])
+elif res.status_code == 200:
+    print("No matching record")
+else:
+    print(result.get("code", result.get("status")), result.get("error", result.get("message")))</pre>
+<pre data-panel="csharp" hidden><button class="copy">Copy</button>using System.Net.Http.Json;
+
+var http = new HttpClient { BaseAddress = new Uri("https://api.gettruvoid.com/"), Timeout = TimeSpan.FromSeconds(40) };
+http.DefaultRequestHeaders.Add("X-API-Key", Environment.GetEnvironmentVariable("TRUVOID_API_KEY"));
+
+using var request = new HttpRequestMessage(HttpMethod.Post, "v1/verify/nin")
+{
+    Content = JsonContent.Create(new { number = nin }),
+};
+request.Headers.Add("Idempotency-Key", $"customer-{customerId}");
+
+var response = await http.SendAsync(request);
+var result = await response.Content.ReadFromJsonAsync&lt;JsonElement&gt;();
+var status = result.TryGetProperty("status", out var s) ? s.GetString() : null;
+Console.WriteLine(status == "match"
+    ? $"Verified: {result.GetProperty("identity").GetProperty("fullName")}"
+    : $"{(int)response.StatusCode}: {status ?? result.GetProperty("code").GetString()}");</pre>
+<pre data-panel="php" hidden><button class="copy">Copy</button>&lt;?php
+$ch = curl_init('https://api.gettruvoid.com/v1/verify/nin');
+curl_setopt_array($ch, [
+    CURLOPT_POST => true,
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_TIMEOUT => 40,
+    CURLOPT_HTTPHEADER => [
+        'X-API-Key: ' . getenv('TRUVOID_API_KEY'),
+        'Content-Type: application/json',
+        'Idempotency-Key: customer-' . $customerId,
+    ],
+    CURLOPT_POSTFIELDS => json_encode(['number' => $nin]),
+]);
+$result = json_decode(curl_exec($ch), true);
+$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+echo ($code === 200 && $result['status'] === 'match')
+    ? 'Verified: ' . $result['identity']['fullName']
+    : $code . ': ' . ($result['code'] ?? $result['status']);</pre>
+  </div>
+  <p>Set your HTTP client timeout to <strong>at least 35 seconds</strong>: TruvoID waits up to 30 seconds for the upstream provider before answering <code>provider_error</code> (refunded).</p>
+
+  <footer>Questions or higher limits? <a href="mailto:support@gettruvoid.com">support@gettruvoid.com</a> · <a href="/">gettruvoid.com</a></footer>
+</main>
+</div>
+<script>
+  document.querySelectorAll('[data-tabs]').forEach((tabs) => {
+    tabs.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => {
+      tabs.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b === button))
+      tabs.querySelectorAll('[data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== button.dataset.tab })
+    }))
+  })
+  document.querySelectorAll('pre .copy').forEach((button) => button.addEventListener('click', async () => {
+    const text = [...button.parentElement.childNodes].filter((n) => n !== button).map((n) => n.textContent).join('').trim()
+    await navigator.clipboard.writeText(text)
+    button.textContent = 'Copied'; setTimeout(() => { button.textContent = 'Copy' }, 1500)
+  }))
+</script>
+</body>
+</html>
