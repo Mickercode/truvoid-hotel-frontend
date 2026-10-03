@@ -1,3 +1,5 @@
+import { getMode } from './mode'
+
 export type AuthProfile = {
   userId: string
   institutionId: string | null
@@ -8,6 +10,12 @@ export type AuthProfile = {
   outletId?: string | null
   /** pending until the worker provisions the workspace; null for platform admins */
   organizationStatus?: 'pending' | 'active' | 'suspended' | 'closed' | null
+  /** incomplete | submitted | needs_changes | approved; null for platform admins */
+  setupStatus?: 'incomplete' | 'submitted' | 'needs_changes' | 'approved' | null
+  /** False until TruvoID approves the profile: free test mode only. */
+  liveEnabled?: boolean
+  /** institution_admin, agency_admin, agency_user, outlet_owner, platform_admin, … */
+  tenantRole?: string
 }
 
 export class ApiError extends Error {
@@ -83,6 +91,7 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
   if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   const usedToken = tokenStore.accessToken
   if (usedToken) headers.set('Authorization', `Bearer ${usedToken}`)
+  headers.set('X-TruvoID-Mode', getMode())
 
   let response: Response
   try {
@@ -122,6 +131,19 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   }),
+  /** Platform staff only — the separate /admin/login page. */
+  adminLogin: (email: string, password: string) => request<Tokens>('/v1/admin/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  }),
+  /** Authenticated file download (documents), returned as an object URL. */
+  download: async (path: string) => {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: tokenStore.accessToken ? { Authorization: `Bearer ${tokenStore.accessToken}` } : {},
+    })
+    if (!response.ok) throw new ApiError('The file could not be downloaded.', response.status)
+    return URL.createObjectURL(await response.blob())
+  },
   profile: () => request<AuthProfile>('/v1/auth/me'),
   /** Revokes this session server-side, then forgets the tokens. Never throws. */
   logout: async () => {

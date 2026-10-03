@@ -23,7 +23,8 @@ public static class OrganizationSetupEndpoints
         group.MapPut("/{section}", SaveSection);
         group.MapPut("/access-level", SaveAccessLevel);
         group.MapPut("/attestation", SaveAttestation);
-        group.MapPost("/documents", UploadDocument);
+        // Bearer-token API (no cookies), so CSRF anti-forgery doesn't apply; without this every upload 500s.
+        group.MapPost("/documents", UploadDocument).DisableAntiforgery();
         group.MapPost("/submit", Submit);
         return app;
     }
@@ -66,7 +67,7 @@ public static class OrganizationSetupEndpoints
         return Results.Ok(new { message = "Attestation saved." });
     }
 
-    private static async Task<IResult> UploadDocument(HttpContext ctx, IFormFile file, string documentType, OrganizationSetupStore setup, CancellationToken ct)
+    private static async Task<IResult> UploadDocument(HttpContext ctx, IFormFile file, [Microsoft.AspNetCore.Mvc.FromForm] string documentType, OrganizationSetupStore setup, CancellationToken ct) // documentType arrives as a multipart field, not a query parameter
     {
         if (string.IsNullOrWhiteSpace(documentType) || file is null)
             return Results.BadRequest(new { error = "Document type and file are required." });

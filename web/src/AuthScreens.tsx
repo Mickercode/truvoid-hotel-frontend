@@ -15,14 +15,26 @@ function FormNotice({ message }: { message: string }) {
 
 // ── Sign in ──────────────────────────────────────────────────────────────────
 
-export function Login({ onLogin, Frame }: { onLogin: (profile: AuthProfile) => void; Frame: Frame }) {
+type SignInProps = { onLogin: (profile: AuthProfile) => void; Frame: Frame }
+
+export function Login(props: SignInProps) {
+  return <SignIn {...props} variant="workspace" />
+}
+
+/** Separate sign-in for TruvoID platform staff (/admin/login). Workspace accounts are refused. */
+export function AdminLogin(props: SignInProps) {
+  return <SignIn {...props} variant="admin" />
+}
+
+function SignIn({ onLogin, Frame, variant }: SignInProps & { variant: 'workspace' | 'admin' }) {
+  const admin = variant === 'admin'
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<{ email?: string | null; password?: string | null }>({})
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const flow = useSteps(['Verifying credentials', 'Securing your session', 'Loading your workspace'])
+  const flow = useSteps(['Verifying credentials', 'Securing your session', admin ? 'Opening operations console' : 'Loading your workspace'])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -35,7 +47,7 @@ export function Login({ onLogin, Frame }: { onLogin: (profile: AuthProfile) => v
     setBusy(true)
     try {
       tokenStore.clear()
-      tokenStore.save(await flow.run(0, () => api.login(email.trim(), password), 600))
+      tokenStore.save(await flow.run(0, () => (admin ? api.adminLogin : api.login)(email.trim(), password), 600))
       const profile = await flow.run(1, () => api.profile())
       const ready = await flow.run(2, async () =>
         (await waitForWorkspace(profile, (s) => flow.update(2, { detail: `Finishing your workspace setup… ${s}s` }))).profile)
@@ -43,7 +55,7 @@ export function Login({ onLogin, Frame }: { onLogin: (profile: AuthProfile) => v
       // Commit the signed-in tree first; navigating while the public routes are
       // still mounted would hit their catch-all redirect instead.
       flushSync(() => onLogin(ready))
-      navigate('/dashboard', { replace: true })
+      navigate(admin ? '/admin/agencies' : '/dashboard', { replace: true })
     } catch (error) {
       tokenStore.clear()
       await pause(700) // let the failed step register before returning to the form
@@ -54,7 +66,9 @@ export function Login({ onLogin, Frame }: { onLogin: (profile: AuthProfile) => v
   }
 
   return (
-    <Frame title={<>Verify with<br /><span className="gradient-text">confidence.</span></>}>
+    <Frame
+      eyebrow={admin ? 'TRUVOID OPERATIONS' : undefined}
+      title={admin ? <>Platform<br /><span className="gradient-text">administration.</span></> : <>Verify with<br /><span className="gradient-text">confidence.</span></>}>
       {busy ? (
         <ProgressSteps title="SIGNING YOU IN" steps={flow.steps} />
       ) : (
@@ -68,13 +82,17 @@ export function Login({ onLogin, Frame }: { onLogin: (profile: AuthProfile) => v
               onChange={(e) => { setPassword(e.target.value); if (errors.password) setErrors({ ...errors, password: null }) }} />
             <Link className="forgot-link" to="/forgot-password">Forgot password?</Link>
             <FormNotice message={message} />
-            <SubmitButton>Sign in ↗</SubmitButton>
+            <SubmitButton>{admin ? 'Sign in to operations ↗' : 'Sign in ↗'}</SubmitButton>
           </form>
-          <div className="auth-foot">
-            <Link to="/register">Create an institution account</Link>
-            <span> · </span>
-            <Link to="/accept-agency-invite">Accept agency invitation</Link>
-          </div>
+          {admin ? (
+            <div className="auth-foot">Restricted to TruvoID staff.</div>
+          ) : (
+            <div className="auth-foot">
+              <Link to="/register">Create an institution account</Link>
+              <span> · </span>
+              <Link to="/accept-agency-invite">Accept agency invitation</Link>
+            </div>
+          )}
         </>
       )}
     </Frame>

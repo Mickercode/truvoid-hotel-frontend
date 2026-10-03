@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api, ApiError } from './api'
 import { FormField, SubmitButton } from './AuthFlow'
 import { VerificationHistoryPage } from './VerificationHistoryPage'
+import type { Mode } from './mode'
 
 type VerifyType = 'nin' | 'bvn' | 'phone'
 type Identity = {
@@ -30,7 +31,8 @@ function validateNumber(type: VerifyType, raw: string): string | null {
   return /^\d{11}$/.test(value) ? null : `A ${LABELS[type]} must be exactly 11 digits.`
 }
 
-export function VerifyPage() {
+export function VerifyPage({ mode }: { mode: Mode }) {
+  const test = mode === 'test'
   const [type, setType] = useState<VerifyType>('nin')
   const [number, setNumber] = useState('')
   const [fieldError, setFieldError] = useState<string | null>(null)
@@ -71,9 +73,11 @@ export function VerifyPage() {
 
   return <section>
     <div className="page-title">
-      <div className="eyebrow">VERIFICATION WORKSPACE {testNumbers && <span className="env-badge">SANDBOX</span>}</div>
+      <div className="eyebrow">VERIFICATION WORKSPACE {test && <span className="env-badge">TEST MODE</span>}</div>
       <h1>Run a verification.</h1>
-      <p className="lede">Check a NIN, BVN or phone number against the national registry. Each completed check is charged to your wallet; provider errors are refunded automatically.</p>
+      <p className="lede">{test
+        ? 'Test mode: checks are free and only the test numbers below return data. Switch to Live (once approved) for real lookups.'
+        : 'Check a NIN, BVN or phone number against the national registry. Each completed check is charged to your wallet; provider errors are refunded automatically.'}</p>
     </div>
     <div className="verify-layout">
       <div className="form-card">
@@ -91,15 +95,15 @@ export function VerifyPage() {
             hint={type === 'phone' ? 'Local (080…) or international (+234…) format.' : undefined}
             onChange={(e) => { setNumber(e.target.value); if (fieldError) setFieldError(null) }} />
           <SubmitButton busy={busy} busyLabel="Checking the registry…">
-            Verify {LABELS[type]}{prices[type] != null && <span className="price-tag">{naira(prices[type]!)}</span>} ↗
+            Verify {LABELS[type]}{test ? <span className="price-tag">FREE</span> : prices[type] != null && <span className="price-tag">{naira(prices[type]!)}</span>} ↗
           </SubmitButton>
         </form>
         {error && <div className="notice error" role="alert">
           {error.message} {error.walletLink && <Link className="text-link" to="/wallet">Fund wallet →</Link>}
         </div>}
-        {testNumbers && <div className="sandbox-help">
-          <div className="eyebrow">SANDBOX TEST NUMBERS</div>
-          <p>No real lookups happen here. Use these to see each outcome:</p>
+        {test && testNumbers && <div className="sandbox-help">
+          <div className="eyebrow">TEST NUMBERS</div>
+          <p>No real lookups happen in test mode. Use these to see each outcome:</p>
           <dl>
             <dt>Match</dt><dd><button type="button" className="link-button" onClick={() => setNumber(testNumbers[type].match)}>{testNumbers[type].match}</button></dd>
             <dt>No match</dt><dd><button type="button" className="link-button" onClick={() => setNumber(testNumbers[type].noMatch)}>{testNumbers[type].noMatch}</button></dd>
@@ -131,7 +135,7 @@ function ResultCard({ outcome }: { outcome: Outcome }) {
   return <div className={`result-card verdict-${verdict.className}`} role="status">
     <div className="result-head">
       <span className={`badge ${verdict.className}`}>{verdict.label}</span>
-      {outcome.environment === 'sandbox' && <span className="env-badge">SANDBOX</span>}
+      {outcome.environment === 'sandbox' && <span className="env-badge">TEST</span>}
     </div>
     <div className="result-identity">
       {id?.photo && <img className="id-photo" src={id.photo} alt={`Registry photo of ${id.fullName ?? 'the subject'}`} />}
@@ -144,7 +148,7 @@ function ResultCard({ outcome }: { outcome: Outcome }) {
       {rows.filter(([, v]) => v).map(([k, v]) => <div key={k}><span>{k}</span><strong>{v}</strong></div>)}
     </div>}
     <div className="result-grid result-meta">
-      <div><span>CHARGE</span><strong>{naira(outcome.charge.amountKobo)}{outcome.charge.refunded && <span className="refund-note"> · refunded</span>}</strong></div>
+      <div><span>CHARGE</span><strong>{outcome.environment === 'sandbox' && outcome.charge.amountKobo === 0 ? 'Free (test mode)' : <>{naira(outcome.charge.amountKobo)}{outcome.charge.refunded && <span className="refund-note"> · refunded</span>}</>}</strong></div>
       <div><span>WALLET AFTER</span><strong>{outcome.balanceAfterKobo != null ? naira(outcome.balanceAfterKobo) : '—'}</strong></div>
       <div><span>REFERENCE</span><strong><code>{outcome.id.slice(0, 13)}</code></strong></div>
     </div>

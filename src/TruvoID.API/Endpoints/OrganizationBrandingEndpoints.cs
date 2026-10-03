@@ -12,7 +12,7 @@ public static class OrganizationBrandingEndpoints
         var group = app.MapGroup("/v1/tenant/branding").RequireAuthorization("TenantManager");
         group.MapGet("/", Get);
         group.MapPut("/", Save);
-        group.MapPost("/logo", UploadLogo);
+        group.MapPost("/logo", UploadLogo).DisableAntiforgery(); // bearer-token API: no CSRF surface
         return app;
     }
 

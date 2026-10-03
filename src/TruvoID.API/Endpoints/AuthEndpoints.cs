@@ -162,14 +162,10 @@ public static class AuthEndpoints
         if (user is null || !PasswordHasher.Verify(request.Password, user.CredentialHash))
             return Results.Json(new { error = "Incorrect email or password." }, statusCode: StatusCodes.Status401Unauthorized);
 
-        // Each sign-in page serves one kind of account. The admin page answers exactly as for a
-        // wrong password, so it never confirms that a workspace account exists.
-        var isPlatformAdmin = user.Role == "platform_admin";
-        if (platformAdmin && !isPlatformAdmin)
+        // Each sign-in serves exactly one kind of account, and a mismatch answers exactly like a
+        // wrong password: neither page confirms an account exists or points to the other page.
+        if ((user.Role == "platform_admin") != platformAdmin)
             return Results.Json(new { error = "Incorrect email or password." }, statusCode: StatusCodes.Status401Unauthorized);
-        if (!platformAdmin && isPlatformAdmin)
-            return Results.Json(new { error = "Platform administrators sign in on the admin sign-in page.", code = "use_admin_login" },
-                statusCode: StatusCodes.Status403Forbidden);
 
         if (user.Status != "active")
             return Results.Json(new { error = user.Status == "invited"
@@ -265,6 +261,7 @@ public static class AuthEndpoints
         {
             SetupStatus = setupStatus,
             LiveEnabled = liveEnabled,
+            TenantRole = user.Role,
             UserId = user.Id.ToString(),
             InstitutionId = (user.OrganizationId ?? Guid.Empty).ToString(),
             Email = user.Email,
@@ -450,4 +447,7 @@ public record AuthProfileResponse
     public string? SetupStatus { get; init; }
     /// <summary>False until the organization is approved: only free test-mode verification until then.</summary>
     public bool LiveEnabled { get; init; }
+    /// <summary>Precise role (institution_admin, agency_admin, agency_user, outlet_owner, platform_admin, …);
+    /// Role above is the coarse legacy claim.</summary>
+    public string TenantRole { get; init; } = "";
 }

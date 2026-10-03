@@ -10,7 +10,7 @@ import {
 } from "react-router-dom";
 import { api, AuthProfile, SESSION_EXPIRED_EVENT, tokenStore } from "./api";
 import { ApiKeysPage } from "./ApiKeysPage";
-import { OrganizationSetupPage } from "./OrganizationSetupPage";
+import { OrganizationSetupPage, PROFILE_CHANGED_EVENT } from "./OrganizationSetupPage";
 import { MarketingHome } from "./MarketingHome";
 import { SolutionsPage } from "./SolutionsPage";
 import { ApiDevelopersPage } from "./ApiDevelopersPage";
@@ -18,9 +18,11 @@ import { AboutPage } from "./AboutPage";
 import { VerifyPage } from "./VerifyPage";
 import { VerificationHistoryPage } from "./VerificationHistoryPage";
 import { TeamPage } from "./TeamPage";
-import { AcceptInvite, ForgotPassword, Login, Register, ResetPassword } from "./AuthScreens";
+import { AcceptInvite, AdminLogin, ForgotPassword, Login, Register, ResetPassword } from "./AuthScreens";
 import { PricingPage } from "./PricingPage";
+import { AdminReview } from "./AdminReview";
 import { useEnvironment } from "./useEnvironment";
+import { useMode } from "./mode";
 
 type Json = Record<string, unknown>;
 function Field({
@@ -127,68 +129,58 @@ function Shell({
   onLogout: () => void;
 }) {
   const location = useLocation();
-  const isAdmin = profile.role.toLowerCase().includes("platform");
+  const isAdmin = profile.tenantRole === "platform_admin" || profile.role.toLowerCase().includes("platform");
   const environment = useEnvironment();
-  const items = [
-    ["/dashboard", "Overview"],
-    ["/setup", "Organization setup"],
-    ["/verify", "Verify identity"],
-    ["/history", "History"],
-    ["/team", "Team"],
-    ["/outlets", "Outlets"],
-    ["/api-keys", "API keys"],
-    ["/wallet", "Wallet"],
-  ];
+  const liveEnabled = Boolean(profile.liveEnabled);
+  const [mode, changeMode] = useMode(liveEnabled);
+  // Platform staff run TruvoID; they don't have a workspace of their own.
+  const items = isAdmin
+    ? [
+        ["/admin/agencies", "Organizations"],
+        ["/admin/pricing", "Pricing"],
+      ]
+    : [
+        ["/dashboard", "Overview"],
+        ["/setup", "Organization setup"],
+        ["/verify", "Verify identity"],
+        ["/history", "History"],
+        ["/team", "Team"],
+        ["/outlets", "Outlets"],
+        ["/api-keys", "API keys"],
+        ["/wallet", "Wallet"],
+      ];
+  const goLiveHint =
+    profile.setupStatus === "submitted"
+      ? "Your profile is under review — live unlocks once TruvoID approves it."
+      : profile.setupStatus === "needs_changes"
+        ? "TruvoID asked for changes to your profile before you can go live."
+        : "Complete and submit your organization profile to go live.";
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <Link className="brand" to="/dashboard">
+        <Link className="brand" to={isAdmin ? "/admin/agencies" : "/dashboard"}>
           <span className="brand-mark">T</span>
           <span>
             Truvo<span className="accent">ID</span>
           </span>
         </Link>
-        <div className="workspace-label">WORKSPACE</div>
+        <div className="workspace-label">{isAdmin ? "OPERATIONS" : "WORKSPACE"}</div>
         <div className="workspace">
           <span className="workspace-dot" />
-          {profile.institutionName || "Platform operations"}
+          {isAdmin ? "TruvoID platform" : profile.institutionName}
         </div>
         <nav>
           {items.map(([path, label], index) => (
             <Link
-              className={
-                location.pathname === path ? "nav-link active" : "nav-link"
-              }
+              className={location.pathname === path ? "nav-link active" : "nav-link"}
               key={path}
               to={path}
             >
-              <span className="nav-index">
-                {String(index + 1).padStart(2, "0")}
-              </span>
+              <span className="nav-index">{String(index + 1).padStart(2, "0")}</span>
               {label}
             </Link>
           ))}
         </nav>
-        {isAdmin && (
-          <>
-            <div className="workspace-label admin-label">ADMIN</div>
-            <nav>
-              {[
-                ["/admin/agencies", "A", "Organizations"],
-                ["/admin/pricing", "P", "Pricing"],
-              ].map(([path, index, label]) => (
-                <Link
-                  key={path}
-                  className={location.pathname === path ? "nav-link admin-active" : "nav-link"}
-                  to={path}
-                >
-                  <span className="nav-index">{index}</span>
-                  {label}
-                </Link>
-              ))}
-            </nav>
-          </>
-        )}
         <div className="sidebar-footer">
           <div className="status">
             <span /> API operational
@@ -204,39 +196,59 @@ function Shell({
             Truvo<span className="accent">ID</span>
           </div>
           <div className="topbar-actions">
+            {!isAdmin && environment !== "sandbox" && (
+              <div className="mode-switch" role="radiogroup" aria-label="Verification mode">
+                <button type="button" role="radio" aria-checked={mode === "test"}
+                  className={mode === "test" ? "active test" : ""} onClick={() => changeMode("test")}>
+                  Test
+                </button>
+                <button type="button" role="radio" aria-checked={mode === "live"} disabled={!liveEnabled}
+                  title={liveEnabled ? "Live verifications are charged to your wallet" : goLiveHint}
+                  className={mode === "live" ? "active live" : ""} onClick={() => changeMode("live")}>
+                  Live
+                </button>
+              </div>
+            )}
             <span className="eyebrow">{profile.fullName || profile.email}</span>
-            <div className="avatar">
-              {(profile.fullName || profile.email)[0].toUpperCase()}
-            </div>
+            <div className="avatar">{(profile.fullName || profile.email)[0].toUpperCase()}</div>
           </div>
         </header>
-        {environment === "sandbox" && (
+        {environment === "sandbox" ? (
           <div className="sandbox-banner" role="note">
             <strong>SANDBOX</strong> Test environment — no real identity lookups or payments.
-            Use the documented test numbers and free test funds.
           </div>
-        )}
+        ) : !isAdmin && mode === "test" ? (
+          <div className="sandbox-banner" role="note">
+            <strong>TEST MODE</strong> Verifications are free and use test numbers — nothing real is looked up.
+            {!liveEnabled && (
+              <>
+                {" "}{goLiveHint}{" "}
+                {profile.setupStatus !== "submitted" && <Link to="/setup">Continue setup →</Link>}
+              </>
+            )}
+          </div>
+        ) : null}
         <div className="page-content">
           <Routes>
-            <Route
-              path="/dashboard"
-              element={<Dashboard profile={profile} />}
-            />
-            <Route path="/setup" element={<OrganizationSetupPage />} />
-            <Route path="/verify" element={<VerifyPage />} />
-            <Route path="/history" element={<VerificationHistoryPage />} />
-            <Route path="/team" element={<TeamPage profile={profile} />} />
-            <Route path="/outlets" element={<Outlets />} />
-            <Route
-              path="/api-keys"
-              element={<ApiKeysPage profile={profile} />}
-            />
-            <Route path="/wallet" element={<Wallet />} />
-            {isAdmin && (
-              <Route path="/admin/agencies" element={<InviteAgency />} />
+            {isAdmin ? (
+              <>
+                <Route path="/admin/agencies" element={<InviteAgency />} />
+                <Route path="/admin/pricing" element={<PricingPage />} />
+                <Route path="*" element={<Navigate to="/admin/agencies" replace />} />
+              </>
+            ) : (
+              <>
+                <Route path="/dashboard" element={<Dashboard profile={profile} />} />
+                <Route path="/setup" element={<OrganizationSetupPage />} />
+                <Route path="/verify" element={<VerifyPage mode={mode} />} />
+                <Route path="/history" element={<VerificationHistoryPage />} />
+                <Route path="/team" element={<TeamPage profile={profile} />} />
+                <Route path="/outlets" element={<Outlets />} />
+                <Route path="/api-keys" element={<ApiKeysPage profile={profile} />} />
+                <Route path="/wallet" element={<Wallet />} />
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </>
             )}
-            {isAdmin && <Route path="/admin/pricing" element={<PricingPage />} />}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
       </main>
@@ -518,6 +530,7 @@ function InviteAgency() {
   const [message, setMessage] = useState("");
   const [organizations, setOrganizations] = useState<Json[]>([]);
   const [refresh, setRefresh] = useState(0);
+  const [reviewing, setReviewing] = useState<{ id: string; name: string } | null>(null);
   useEffect(() => {
     api
       .get<Json[]>("/v1/admin/organizations")
@@ -590,6 +603,13 @@ function InviteAgency() {
           </div>
         )}
       </div>
+      {reviewing && (
+        <AdminReview
+          organization={reviewing}
+          onClose={() => setReviewing(null)}
+          onDecided={() => setRefresh((value) => value + 1)}
+        />
+      )}
       {organizations.length ? (
         <div className="table-wrap">
           <table>
@@ -613,7 +633,19 @@ function InviteAgency() {
                       {String(item.status)}
                     </span>
                   </td>
-                  <td>{String(item.setupStatus)}</td>
+                  <td>
+                    <span className={`badge ${item.setupStatus === "approved" ? "active" : item.setupStatus === "submitted" ? "pending" : item.setupStatus === "needs_changes" ? "failed" : ""}`}>
+                      {String(item.setupStatus).replace("_", " ")}
+                    </span>
+                    {item.type === "institution" && (
+                      <button
+                        className="link-button"
+                        onClick={() => setReviewing({ id: String(item.id), name: String(item.name) })}
+                      >
+                        {item.setupStatus === "submitted" ? " Review ↗" : " View"}
+                      </button>
+                    )}
+                  </td>
                   <td>{String(item.userCount)}</td>
                   <td>
                     {String(item.status) === "suspended" ? (
@@ -667,6 +699,12 @@ export function App() {
     window.addEventListener(SESSION_EXPIRED_EVENT, expire);
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expire);
   }, []);
+  useEffect(() => {
+    // Setup status changes what the shell shows (test-mode banner, Live switch).
+    const reload = () => void api.profile().then(setProfile).catch(() => undefined);
+    window.addEventListener(PROFILE_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(PROFILE_CHANGED_EVENT, reload);
+  }, []);
   if (loading)
     return (
       <div className="loading-screen">
@@ -694,6 +732,7 @@ export function App() {
       <Route path="/register" element={<Register onLogin={setProfile} Frame={AuthFrame} />} />
       <Route path="/accept-agency-invite" element={<AcceptInvite kind="agency" Frame={AuthFrame} />} />
       <Route path="/accept-team-invite" element={<AcceptInvite kind="team" Frame={AuthFrame} />} />
+      <Route path="/admin/login" element={<AdminLogin onLogin={setProfile} Frame={AuthFrame} />} />
       <Route path="/forgot-password" element={<ForgotPassword Frame={AuthFrame} />} />
       <Route path="/reset-password" element={<ResetPassword Frame={AuthFrame} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
