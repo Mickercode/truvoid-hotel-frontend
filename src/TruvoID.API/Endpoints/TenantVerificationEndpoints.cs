@@ -71,7 +71,8 @@ public static class TenantVerificationEndpoints
             };
             return outcome.Status switch
             {
-                "provider_error" => Results.Json(body, statusCode: StatusCodes.Status502BadGateway),
+                // provider_error is a completed request (refunded, safe to retry), so it is 200 like no_match.
+                // A 502 would be replaced by Railway/Cloudflare with a bare "error code: 502", losing this body.
                 "pending" => Results.Json(body, statusCode: StatusCodes.Status202Accepted),
                 _ => Results.Ok(body),
             };

@@ -139,7 +139,7 @@
   <p>Malformed numbers are rejected with <code>400</code> before anything is charged.</p>
 
   <h2 id="response">The response</h2>
-  <p>A completed check returns <code>200</code> whether or not a record matched — read <code>status</code> to decide what to do.</p>
+  <p>A completed request returns <code>200</code> — whether a record matched, didn't match, or the upstream provider failed (refunded). Always read <code>status</code> to decide what to do.</p>
 <pre>{
   <span class="k">"id"</span>: <span class="s">"d869cd79-52ea-461a-8b52-05444e7484b4"</span>,   <span class="c">// keep this reference</span>
   <span class="k">"type"</span>: <span class="s">"nin"</span>,
@@ -165,7 +165,7 @@
     <tr><th>status</th><th>HTTP</th><th>Meaning</th><th>Charged?</th></tr>
     <tr><td><code>match</code></td><td>200</td><td>A record exists; <code>identity</code> is populated.</td><td>Yes</td></tr>
     <tr><td><code>no_match</code></td><td>200</td><td>The lookup ran, but no record matches. <code>identity</code> is <code>null</code>.</td><td>Yes — the lookup was performed</td></tr>
-    <tr><td><code>provider_error</code></td><td>502</td><td>The upstream identity provider failed or timed out. Safe to retry.</td><td>No — refunded in full</td></tr>
+    <tr><td><code>provider_error</code></td><td>200</td><td>The upstream identity provider failed or timed out. Safe to retry.</td><td>No — refunded in full</td></tr>
     <tr><td><code>pending</code></td><td>202</td><td>An earlier request with the same Idempotency-Key is still running. Retry shortly with the same key.</td><td>Once, when it completes</td></tr>
   </table>
   <p>Fields inside <code>identity</code> depend on the verification type and what the record holds; treat every field as optional.</p>
@@ -200,7 +200,6 @@
     <tr><td>409</td><td><code>idempotency_conflict</code></td><td>The same Idempotency-Key is still in flight. Retry shortly.</td></tr>
     <tr><td>409</td><td><code>workspace_not_ready</code></td><td>Your workspace is still being set up (seconds after signup) or is suspended.</td></tr>
     <tr><td>429</td><td><code>rate_limited</code></td><td>Slow down; wait for the <code>Retry-After</code> seconds.</td></tr>
-    <tr><td>502</td><td>— (<code>status: provider_error</code>)</td><td>Upstream failure; refunded. Retry with backoff.</td></tr>
     <tr><td>503</td><td><code>provider_unavailable</code></td><td>Verification is temporarily unavailable. Nothing was charged. Retry later.</td></tr>
     <tr><td>503</td><td><code>pricing_not_configured</code></td><td>Contact TruvoID support. Nothing was charged.</td></tr>
   </table>
@@ -233,10 +232,12 @@ const res = await fetch('https://api.gettruvoid.com/v1/verify/nin', {
   body: JSON.stringify({ number: nin }),
 })
 const result = await res.json()
-if (res.status === 200 && result.status === 'match') {
+if (result.status === 'match') {
   console.log('Verified:', result.identity.fullName)
-} else if (res.status === 200) {
+} else if (result.status === 'no_match') {
   console.log('No matching record')
+} else if (result.status === 'provider_error') {
+  console.log('Provider unavailable - not charged, retry later')
 } else {
   console.error(result.code ?? result.status, result.error ?? result.message)
 }</pre>
@@ -252,10 +253,13 @@ res = requests.post(
     timeout=40,
 )
 result = res.json()
-if res.status_code == 200 and result["status"] == "match":
+status = result.get("status")
+if status == "match":
     print("Verified:", result["identity"]["fullName"])
-elif res.status_code == 200:
+elif status == "no_match":
     print("No matching record")
+elif status == "provider_error":
+    print("Provider unavailable - not charged, retry later")
 else:
     print(result.get("code", result.get("status")), result.get("error", result.get("message")))</pre>
 <pre data-panel="csharp" hidden><button class="copy">Copy</button>using System.Net.Http.Json;
@@ -290,9 +294,12 @@ curl_setopt_array($ch, [
 ]);
 $result = json_decode(curl_exec($ch), true);
 $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-echo ($code === 200 && $result['status'] === 'match')
-    ? 'Verified: ' . $result['identity']['fullName']
-    : $code . ': ' . ($result['code'] ?? $result['status']);</pre>
+echo match ($result['status'] ?? null) {
+    'match' => 'Verified: ' . $result['identity']['fullName'],
+    'no_match' => 'No matching record',
+    'provider_error' => 'Provider unavailable - not charged, retry later',
+    default => $code . ': ' . ($result['code'] ?? 'error'),
+};</pre>
   </div>
   <p>Set your HTTP client timeout to <strong>at least 35 seconds</strong>: TruvoID waits up to 30 seconds for the upstream provider before answering <code>provider_error</code> (refunded).</p>
 

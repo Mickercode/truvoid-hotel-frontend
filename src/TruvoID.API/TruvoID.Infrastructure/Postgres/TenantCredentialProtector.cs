@@ -19,15 +19,27 @@ public sealed class TenantCredentialProtector
     public TenantCredentialProtector(string keyId, byte[] key)
     {
         if (key.Length != 32)
-            throw new ArgumentException("Tenant credential key must be 32 bytes (AES-256).", nameof(key));
+            throw new ArgumentException(
+                $"Postgres:TenantCredentialKey must be base64 for exactly 32 bytes (AES-256); this one is {key.Length} bytes. " +
+                "Generate one with: openssl rand -base64 32 — and use the same value on the API and the worker.", nameof(key));
         KeyId = keyId;
         _key = key;
     }
 
     public string KeyId { get; }
 
-    public static TenantCredentialProtector FromBase64(string keyId, string base64Key) =>
-        new(keyId, Convert.FromBase64String(base64Key));
+    public static TenantCredentialProtector FromBase64(string keyId, string base64Key)
+    {
+        try
+        {
+            return new(keyId, Convert.FromBase64String(base64Key.Trim().Trim('"')));
+        }
+        catch (FormatException)
+        {
+            // Never echo the value: it's a secret.
+            throw new ArgumentException("Postgres:TenantCredentialKey is not valid base64. Generate one with: openssl rand -base64 32");
+        }
+    }
 
     public byte[] Protect(Guid organizationId, string password)
     {
