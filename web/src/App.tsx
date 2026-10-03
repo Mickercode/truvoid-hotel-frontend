@@ -21,6 +21,7 @@ import { TeamPage } from "./TeamPage";
 import { AcceptInvite, AdminLogin, ForgotPassword, Login, Register, ResetPassword } from "./AuthScreens";
 import { PricingPage } from "./PricingPage";
 import { AdminReview } from "./AdminReview";
+import { CopyButton } from "./CopyButton";
 import { useEnvironment } from "./useEnvironment";
 import { useMode } from "./mode";
 
@@ -528,6 +529,8 @@ function InviteAgency() {
   });
   const [invite, setInvite] = useState("");
   const [message, setMessage] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [sending, setSending] = useState(false);
   const [organizations, setOrganizations] = useState<Json[]>([]);
   const [refresh, setRefresh] = useState(0);
   const [reviewing, setReviewing] = useState<{ id: string; name: string } | null>(null);
@@ -539,19 +542,28 @@ function InviteAgency() {
   }, [refresh]);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (sending) return;
+    setSending(true);
+    setInvite("");
+    setMessage("");
     try {
       const result = await api.post<Json>("/v1/admin/agencies/invite", form);
       setInvite(
         `${window.location.origin}/accept-agency-invite?token=${String(result.invitationToken)}`,
       );
+      setFailed(false);
       setMessage(
-        "Invitation created. Copy the link and send it to the agency administrator.",
+        "Invitation created and emailed. You can also copy the link below and send it yourself.",
       );
+      setForm({ agencyName: "", adminFullName: "", adminEmail: "" });
       setRefresh((value) => value + 1);
     } catch (error) {
+      setFailed(true);
       setMessage(
         error instanceof Error ? error.message : "Could not create invitation.",
       );
+    } finally {
+      setSending(false);
     }
   }
   async function changeStatus(id: string, action: string) {
@@ -593,13 +605,14 @@ function InviteAgency() {
               setForm({ ...form, adminEmail: event.target.value })
             }
           />
-          <Button>Generate invitation ↗</Button>
+          <Button disabled={sending}>{sending ? "Creating invitation…" : "Generate invitation ↗"}</Button>
         </form>
-        <Notice message={message} error={message.startsWith("Could")} />
+        <Notice message={message} error={failed} />
         {invite && (
           <div className="key-reveal">
             <span>Invitation link</span>
             <code>{invite}</code>
+            <CopyButton value={invite} label="Copy invitation link" />
           </div>
         )}
       </div>

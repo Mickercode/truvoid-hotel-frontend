@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.WebUtilities;
+using Npgsql;
 using TruvoID.Core.Interfaces;
 using TruvoID.Domain.Enums;
 using TruvoID.Infrastructure.Postgres;
@@ -51,9 +52,21 @@ public static class TenantTeamEndpoints
             if (await outlet.ExecuteScalarAsync(ct) is null)
                 return Results.NotFound(new { error = "Outlet not found in this organization." });
         }
+        if ((request.FullName?.Trim().Length ?? 0) is < 2 or > 120)
+            return Results.BadRequest(new { error = "Enter the team member's full name." });
+        if (!AuthValidation.IsValidEmail(request.Email))
+            return Results.BadRequest(new { error = "Enter a valid email address." });
         var rawToken = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken))).ToLowerInvariant();
-        var invitation = await identities.InviteUserAsync(ctx.GetOrganizationId(), request.Email, request.FullName, request.Role.ToLowerInvariant(), request.OutletId, ctx.GetUserId(), hash, DateTime.UtcNow.AddDays(7), ct);
+        UserInvitation invitation;
+        try
+        {
+            invitation = await identities.InviteUserAsync(ctx.GetOrganizationId(), request.Email, request.FullName!, request.Role.ToLowerInvariant(), request.OutletId, ctx.GetUserId(), hash, DateTime.UtcNow.AddDays(7), ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            return Results.Conflict(new { error = "That email already has a TruvoID account. Each email can belong to only one account — use a different email.", code = "email_taken" });
+        }
         await audit.LogAsync(AuditAction.Created, "TeamInvitation", invitation.InvitationId, ctx.GetUserId(), "User", request.Email, ct);
         var inviteUrl = AppLinks.Build(configuration, $"accept-team-invite?token={rawToken}");
         try

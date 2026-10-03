@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.WebUtilities;
+using Npgsql;
 using TruvoID.Core.Interfaces;
 using TruvoID.Domain.Enums;
 using TruvoID.Infrastructure.Postgres;
@@ -32,6 +33,13 @@ public static class AgencyInvitationEndpoints
         IConfiguration configuration,
         CancellationToken ct)
     {
+        // Validate before anything is created, so a typo never leaves a junk agency behind.
+        if ((request.AgencyName?.Trim().Length ?? 0) is < 2 or > 120)
+            return Results.BadRequest(new { error = "Agency name must be between 2 and 120 characters." });
+        if ((request.AdminFullName?.Trim().Length ?? 0) is < 2 or > 120)
+            return Results.BadRequest(new { error = "Enter the agency administrator's full name." });
+        if (!AuthValidation.IsValidEmail(request.AdminEmail))
+            return Results.BadRequest(new { error = "Enter a valid email address for the agency administrator." });
         try
         {
             var rawToken = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
@@ -67,6 +75,10 @@ public static class AgencyInvitationEndpoints
         catch (ArgumentException ex)
         {
             return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            return Results.Conflict(new { error = "That email already has a TruvoID account. Each email can belong to only one account — use a different email.", code = "email_taken" });
         }
     }
 
