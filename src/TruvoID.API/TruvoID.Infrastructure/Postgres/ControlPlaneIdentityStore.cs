@@ -332,7 +332,8 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<bool> DeactivateOrganizationAsync(Guid organizationId, CancellationToken ct = default)
+    /// <summary>Suspends the organization and disables its members; returns their ids (to end sessions), or null if not found.</summary>
+    public async Task<IReadOnlyList<Guid>?> DeactivateOrganizationAsync(Guid organizationId, CancellationToken ct = default)
     {
         await using var conn = await controlPlane.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
@@ -340,17 +341,22 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
         {
             organization.Parameters.AddWithValue("id", organizationId);
             if (await organization.ExecuteNonQueryAsync(ct) != 1)
-                return false;
+                return null;
         }
 
-        await using (var users = new NpgsqlCommand("UPDATE control.app_user SET status = 'suspended', updated_at = now() WHERE organization_id = @id", conn, tx))
+        // app_user.status allows invited | active | disabled — 'suspended' would violate the check.
+        var members = new List<Guid>();
+        await using (var users = new NpgsqlCommand(
+            "UPDATE control.app_user SET status = 'disabled', updated_at = now() WHERE organization_id = @id RETURNING id", conn, tx))
         {
             users.Parameters.AddWithValue("id", organizationId);
-            await users.ExecuteNonQueryAsync(ct);
+            await using var reader = await users.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                members.Add(reader.GetGuid(0));
         }
 
         await tx.CommitAsync(ct);
-        return true;
+        return members;
     }
 
     private async Task<ControlPlaneUser?> FindAsync(

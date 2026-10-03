@@ -52,6 +52,16 @@ public static class HttpContextExtensions
     }
 
     /// <summary>Set only when the request authenticated via an X-API-Key header rather than a JWT.</summary>
+    /// <summary>
+    /// The organization's own administrator (institution_admin / agency_admin), signed in at
+    /// organization scope. Staff, agency users, outlet users, API keys and platform admins are not.
+    /// Use for organization-wide powers: org API keys, deactivation, billing settings.
+    /// </summary>
+    public static bool IsOrganizationAdmin(this HttpContext ctx) =>
+        ctx.User.FindFirst("tenant_role")?.Value is "institution_admin" or "agency_admin"
+        && ctx.GetOutletId() is null
+        && ctx.GetOrganizationId() != Guid.Empty;
+
     public static Guid? GetApiKeyId(this HttpContext ctx)
     {
         var claim = ctx.User.FindFirst("api_key_id");

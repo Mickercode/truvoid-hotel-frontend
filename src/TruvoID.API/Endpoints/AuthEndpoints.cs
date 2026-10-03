@@ -89,16 +89,32 @@ public static class AuthEndpoints
         });
     }
 
+    /// <summary>
+    /// Shuts down the whole organization. Organization administrators only, confirmed with
+    /// their password — previously any signed-in member (even outlet staff) could do this.
+    /// </summary>
     private static async Task<IResult> DeactivateAccount(
         HttpContext ctx,
-        ControlPlaneIdentityStore identities)
+        DeactivateRequest? request,
+        ControlPlaneIdentityStore identities,
+        RefreshTokenStore refreshTokens,
+        IAuditService audit)
     {
-        var organizationId = ctx.GetOrganizationId();
-        if (organizationId == Guid.Empty) return Results.Unauthorized();
-        if (!await identities.DeactivateOrganizationAsync(organizationId))
-            return Results.NotFound(new { error = "Organization not found." });
+        if (!ctx.IsOrganizationAdmin())
+            return Results.Json(new { error = "Only your organization's administrator can deactivate it." },
+                statusCode: StatusCodes.Status403Forbidden);
+        var user = await identities.FindByIdAsync(ctx.GetUserId());
+        if (user is null || !PasswordHasher.Verify(request?.Password ?? "", user.CredentialHash))
+            return Results.BadRequest(new { error = "Confirm with your current password to deactivate the organization." });
 
-        return Results.Ok(new { message = "Account deactivated." });
+        var organizationId = ctx.GetOrganizationId();
+        var memberIds = await identities.DeactivateOrganizationAsync(organizationId);
+        if (memberIds is null)
+            return Results.NotFound(new { error = "Organization not found." });
+        foreach (var memberId in memberIds)
+            await refreshTokens.RevokeAllForUserAsync(memberId);
+        await audit.LogAsync(AuditAction.Updated, "Organization", organizationId, user.Id, "User", "deactivated");
+        return Results.Ok(new { message = "Organization deactivated. Everyone has been signed out." });
     }
 
     private static async Task<IResult> Register(
@@ -408,6 +424,8 @@ public static class AuthEndpoints
     }
 
     public record LogoutRequest(string? RefreshToken);
+
+    public record DeactivateRequest(string? Password);
 
     public record ChangePasswordRequest
     {

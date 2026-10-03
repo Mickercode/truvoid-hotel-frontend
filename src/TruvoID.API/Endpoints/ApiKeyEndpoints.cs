@@ -14,7 +14,13 @@ public static class ApiKeyEndpoints
 
     public static IEndpointRouteBuilder MapApiKeyEndpoints(this IEndpointRouteBuilder app)
     {
-        var legacy = app.MapGroup("/v1/api-keys").RequireAuthorization();
+        // Organization-wide keys: organization administrators only. Previously any signed-in
+        // member — including outlet staff — could mint or revoke organization-wide keys.
+        var legacy = app.MapGroup("/v1/api-keys").RequireAuthorization("TenantManager")
+            .AddEndpointFilter(async (context, next) => context.HttpContext.IsOrganizationAdmin()
+                ? await next(context)
+                : Results.Json(new { error = "Only your organization's administrator can manage organization API keys." },
+                    statusCode: StatusCodes.Status403Forbidden));
         legacy.MapGet("/", ListKeys);
         legacy.MapPost("/", CreateKey);
         legacy.MapDelete("/{id:guid}", RevokeKey);
