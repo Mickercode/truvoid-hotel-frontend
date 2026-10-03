@@ -34,6 +34,7 @@ public class VerificationRunnerTests(TenantDatabase t) : IClassFixture<TenantDat
         t.Factory,
         new TenantVerificationService(t.ControlPlane, new TenantWalletService()),
         provider ?? new SandboxIdentityProvider(TimeSpan.Zero),
+        new SandboxIdentityProvider(TimeSpan.Zero),
         NullLogger<VerificationRunner>.Instance);
 
     private async Task<long> BalanceAsync()
@@ -165,6 +166,37 @@ public class VerificationRunnerTests(TenantDatabase t) : IClassFixture<TenantDat
         await Assert.ThrowsAsync<InsufficientWalletBalanceException>(() =>
             Runner(spy).RunAsync(Scope, "nin", "00000000001", _user, null, null, CancellationToken.None));
         Assert.Equal(0, spy.Calls);
+    }
+
+    [Fact]
+    public async Task TestMode_IsFree_AndRecordedAsSandbox()
+    {
+        var before = await BalanceAsync();
+        // A live provider that would blow up proves test mode never reaches it.
+        var outcome = await Runner(new ThrowingProvider()).RunAsync(Scope, "nin", "00000000001", _user, null, null, CancellationToken.None, testMode: true);
+
+        Assert.Equal("match", outcome.Status);
+        Assert.Equal("sandbox", outcome.Environment);
+        Assert.Equal(0, outcome.AmountKobo);
+        Assert.Null(outcome.BalanceAfterKobo);
+        Assert.Equal(before, await BalanceAsync());
+        var (status, result) = await CallAsync(outcome.CallId);
+        Assert.Equal("succeeded", status);
+        Assert.Contains("sandbox", System.Text.Json.JsonDocument.Parse(result!).RootElement.GetProperty("environment").GetString());
+    }
+
+    [Fact]
+    public async Task TestMode_ProviderError_IsNotReportedAsRefund_AndReplays()
+    {
+        var key = $"idem-{Guid.NewGuid():N}";
+        var first = await Runner().RunAsync(Scope, "nin", "00000000003", _user, null, key, CancellationToken.None, testMode: true);
+        var replay = await Runner().RunAsync(Scope, "nin", "00000000003", _user, null, key, CancellationToken.None, testMode: true);
+
+        Assert.Equal("provider_error", first.Status);
+        Assert.False(first.Refunded);
+        Assert.True(replay.Replayed);
+        Assert.Equal(first.CallId, replay.CallId);
+        Assert.False(replay.Refunded);
     }
 
     private sealed class ThrowingProvider : IIdentityProvider

@@ -75,6 +75,38 @@ public sealed class TenantVerificationService(
     }
 
     /// <summary>
+    /// Test mode: records a pending call with no wallet debit. Free by design, so a workspace
+    /// can integrate before its profile is approved or its wallet is funded.
+    /// </summary>
+    public async Task<Guid> RecordTestCallAsync(
+        TenantSession session,
+        string verificationType,
+        string subjectRef,
+        Guid? userId,
+        Guid? apiKeyId,
+        string? idempotencyKey,
+        CancellationToken ct = default)
+    {
+        if ((userId is null) == (apiKeyId is null))
+            throw new ArgumentException("Exactly one verification caller is required.");
+        var callId = Guid.NewGuid();
+        await using var command = session.CreateCommand("""
+            INSERT INTO verification_call
+                (id, outlet_id, user_id, api_key_id, verification_type, subject_ref, status, idempotency_key)
+            VALUES (@id, @outletId, @userId, @apiKeyId, @type, @subjectRef, 'pending', @idempotencyKey)
+            """);
+        command.Parameters.AddWithValue("id", callId);
+        command.Parameters.Add("outletId", NpgsqlDbType.Uuid).Value = (object?)session.Scope.OutletId ?? DBNull.Value;
+        command.Parameters.Add("userId", NpgsqlDbType.Uuid).Value = (object?)userId ?? DBNull.Value;
+        command.Parameters.Add("apiKeyId", NpgsqlDbType.Uuid).Value = (object?)apiKeyId ?? DBNull.Value;
+        command.Parameters.AddWithValue("type", verificationType.Trim().ToLowerInvariant());
+        command.Parameters.AddWithValue("subjectRef", HashSubject(subjectRef));
+        command.Parameters.Add("idempotencyKey", NpgsqlDbType.Text).Value = (object?)idempotencyKey ?? DBNull.Value;
+        await command.ExecuteNonQueryAsync(ct);
+        return callId;
+    }
+
+    /// <summary>
     /// Records the provider's answer. A failed call is refunded in the same transaction;
     /// returns the wallet balance after that refund, or null when nothing was refunded.
     /// </summary>
@@ -96,14 +128,14 @@ public sealed class TenantVerificationService(
         await using var reader = await command.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
             throw new InvalidOperationException("Verification call not found in this tenant scope.");
-        var ledgerId = reader.GetGuid(0);
+        Guid? ledgerId = reader.IsDBNull(0) ? null : reader.GetGuid(0); // null for free test-mode calls
         var status = reader.GetString(1);
         await reader.CloseAsync();
         if (status != "pending")
             throw new InvalidOperationException("Verification call has already been completed.");
 
         long? refundedBalance = null;
-        if (!succeeded)
+        if (!succeeded && ledgerId is not null)
         {
             await using var amountCommand = session.CreateCommand(
                 "SELECT amount_kobo FROM wallet_ledger_entry WHERE id = @id");
@@ -132,9 +164,9 @@ public sealed class TenantVerificationService(
         TenantSession session, string idempotencyKey, Guid? userId, Guid? apiKeyId, CancellationToken ct = default)
     {
         await using var command = session.CreateCommand("""
-            SELECT c.id, c.verification_type, c.status, c.result::text, l.amount_kobo, c.created_at
+            SELECT c.id, c.verification_type, c.status, c.result::text, coalesce(l.amount_kobo, 0), c.created_at
             FROM verification_call c
-            JOIN wallet_ledger_entry l ON l.id = c.ledger_entry_id
+            LEFT JOIN wallet_ledger_entry l ON l.id = c.ledger_entry_id
             WHERE c.idempotency_key = @key
               AND ((@userId IS NOT NULL AND c.user_id = @userId)
                 OR (@apiKeyId IS NOT NULL AND c.api_key_id = @apiKeyId))

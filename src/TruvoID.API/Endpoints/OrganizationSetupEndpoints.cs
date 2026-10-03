@@ -13,6 +13,12 @@ public static class OrganizationSetupEndpoints
     public static IEndpointRouteBuilder MapOrganizationSetupEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/v1/tenant/setup").RequireAuthorization("TenantManager");
+        // Any edit while the profile is under review or approved → 409 with a clear reason.
+        group.AddEndpointFilter(async (context, next) =>
+        {
+            try { return await next(context); }
+            catch (SetupLockedException ex) { return Results.Conflict(new { error = ex.Message, code = "setup_locked" }); }
+        });
         group.MapGet("/", Get);
         group.MapPut("/{section}", SaveSection);
         group.MapPut("/access-level", SaveAccessLevel);
@@ -87,17 +93,22 @@ public static class OrganizationSetupEndpoints
             && snapshot.Documents.Count > 0;
         if (!complete)
             return Results.Conflict(new { error = "Complete the required organization sections, one access level, one document, and the attestation before submitting." });
-        await setup.SubmitAsync(ctx.GetOrganizationId(), ct);
-        return Results.Ok(new { message = "Organization profile submitted for review." });
+        if (!await setup.SubmitAsync(ctx.GetOrganizationId(), ct))
+            return Results.Conflict(new { error = "Your profile is already under review or approved.", code = "setup_locked" });
+        return Results.Ok(new { message = "Organization profile submitted. TruvoID will review it and unlock live verification once approved." });
     }
 
-    private static object ToResponse(OrganizationSetupSnapshot snapshot) => new
+    internal static object ToResponse(OrganizationSetupSnapshot snapshot) => new
     {
         organizationId = snapshot.OrganizationId,
         sections = snapshot.Sections.ToDictionary(pair => pair.Key, pair => JsonDocument.Parse(pair.Value).RootElement.Clone()),
         accessLevel = snapshot.AccessLevel,
         attested = snapshot.AttestedAt.HasValue,
         status = snapshot.Status,
+        reviewNote = snapshot.ReviewNote,
+        submittedAt = snapshot.SubmittedAt,
+        reviewedAt = snapshot.ReviewedAt,
+        editable = snapshot.Status is not ("submitted" or "approved"),
         documents = snapshot.Documents,
         progress = CalculateProgress(snapshot)
     };

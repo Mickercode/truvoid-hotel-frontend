@@ -22,7 +22,13 @@ public static class AuthEndpoints
         authGroup.MapPost("/register", Register)
             .AllowAnonymous().RequireRateLimiting("auth");
 
-        authGroup.MapPost("/login", Login)
+        authGroup.MapPost("/login", (LoginRequest request, ControlPlaneIdentityStore identities, RefreshTokenStore refreshTokens, IAuditService audit) =>
+                Login(request, identities, refreshTokens, audit, platformAdmin: false))
+            .AllowAnonymous().RequireRateLimiting("auth");
+
+        // Platform staff sign in separately (dashboard route /admin/login); workspace users can't use it.
+        app.MapPost("/v1/admin/auth/login", (LoginRequest request, ControlPlaneIdentityStore identities, RefreshTokenStore refreshTokens, IAuditService audit) =>
+                Login(request, identities, refreshTokens, audit, platformAdmin: true))
             .AllowAnonymous().RequireRateLimiting("auth");
 
         authGroup.MapPost("/refresh", RefreshToken)
@@ -144,7 +150,8 @@ public static class AuthEndpoints
         LoginRequest request,
         ControlPlaneIdentityStore identities,
         RefreshTokenStore refreshTokens,
-        IAuditService audit)
+        IAuditService audit,
+        bool platformAdmin)
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrEmpty(request.Password))
             return Results.BadRequest(new { error = "Enter your email address and password." });
@@ -154,6 +161,15 @@ public static class AuthEndpoints
         // Same message for unknown email and wrong password, so login can't be used to probe accounts.
         if (user is null || !PasswordHasher.Verify(request.Password, user.CredentialHash))
             return Results.Json(new { error = "Incorrect email or password." }, statusCode: StatusCodes.Status401Unauthorized);
+
+        // Each sign-in page serves one kind of account. The admin page answers exactly as for a
+        // wrong password, so it never confirms that a workspace account exists.
+        var isPlatformAdmin = user.Role == "platform_admin";
+        if (platformAdmin && !isPlatformAdmin)
+            return Results.Json(new { error = "Incorrect email or password." }, statusCode: StatusCodes.Status401Unauthorized);
+        if (!platformAdmin && isPlatformAdmin)
+            return Results.Json(new { error = "Platform administrators sign in on the admin sign-in page.", code = "use_admin_login" },
+                statusCode: StatusCodes.Status403Forbidden);
 
         if (user.Status != "active")
             return Results.Json(new { error = user.Status == "invited"
@@ -219,7 +235,8 @@ public static class AuthEndpoints
 
     private static async Task<IResult> GetCurrentUser(
         HttpContext ctx,
-        ControlPlaneIdentityStore identities)
+        ControlPlaneIdentityStore identities,
+        OrganizationSetupStore setup)
     {
         // Extract claims from the JWT in the Authorization header
         var authHeader = ctx.Request.Headers.Authorization.ToString();
@@ -236,8 +253,18 @@ public static class AuthEndpoints
         if (user is null)
             return Results.Unauthorized();
 
+        string? setupStatus = null;
+        var liveEnabled = false;
+        if (user.OrganizationId is { } organizationId && user.OrganizationStatus == "active")
+        {
+            setupStatus = (await setup.GetAsync(organizationId)).Status;
+            liveEnabled = await setup.IsLiveEnabledAsync(organizationId);
+        }
+
         return Results.Ok(new AuthProfileResponse
         {
+            SetupStatus = setupStatus,
+            LiveEnabled = liveEnabled,
             UserId = user.Id.ToString(),
             InstitutionId = (user.OrganizationId ?? Guid.Empty).ToString(),
             Email = user.Email,
@@ -419,4 +446,8 @@ public record AuthProfileResponse
     public string? OutletId { get; init; }
     /// <summary>pending | active | suspended | closed; null for platform admins.</summary>
     public string? OrganizationStatus { get; init; }
+    /// <summary>incomplete | submitted | needs_changes | approved; null for platform admins.</summary>
+    public string? SetupStatus { get; init; }
+    /// <summary>False until the organization is approved: only free test-mode verification until then.</summary>
+    public bool LiveEnabled { get; init; }
 }

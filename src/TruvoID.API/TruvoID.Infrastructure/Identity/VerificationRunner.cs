@@ -34,10 +34,12 @@ public sealed class VerificationRunner(
     TenantConnectionFactory tenants,
     TenantVerificationService verifications,
     IIdentityProvider provider,
+    SandboxIdentityProvider sandbox,
     ILogger<VerificationRunner> logger)
 {
     public static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(30);
 
+    /// <summary>The live provider's environment ("live", or "sandbox" on a sandbox-only deployment).</summary>
     public string Environment => provider.Environment;
 
     public async Task<VerificationOutcome> RunAsync(
@@ -47,27 +49,34 @@ public sealed class VerificationRunner(
         Guid? userId,
         Guid? apiKeyId,
         string? idempotencyKey,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool testMode = false)
     {
+        // Test mode: sandbox provider, never charged (see TenantVerificationService.RecordTestCallAsync).
+        var source = testMode ? sandbox : provider;
         type = (type ?? "").Trim().ToLowerInvariant();
         var subject = IdentitySubject.Normalize(type, rawSubject);
         idempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey.Trim();
         if (idempotencyKey is { Length: > 128 })
             throw new ArgumentException("Idempotency-Key must be 128 characters or fewer.");
-        if (!provider.IsConfigured)
+        if (!source.IsConfigured)
             throw new IdentityProviderUnavailableException();
 
         if (idempotencyKey is not null)
         {
             await using var lookup = await tenants.BeginAsync(scope, ct);
             if (await verifications.FindByIdempotencyKeyAsync(lookup, idempotencyKey, userId, apiKeyId, ct) is { } stored)
-                return FromStored(stored);
+                return FromStored(stored, source);
         }
 
         VerificationReservation reservation;
         await using (var session = await tenants.BeginAsync(scope, ct))
         {
-            reservation = await verifications.ReserveAsync(session, type, subject, userId, apiKeyId, idempotencyKey, ct);
+            reservation = testMode
+                ? new VerificationReservation(
+                    await verifications.RecordTestCallAsync(session, type, subject, userId, apiKeyId, idempotencyKey, ct),
+                    Guid.Empty, PriceKobo: 0, BalanceAfterKobo: 0, type)
+                : await verifications.ReserveAsync(session, type, subject, userId, apiKeyId, idempotencyKey, ct);
             await session.CommitAsync(ct);
         }
         var createdAt = DateTime.UtcNow;
@@ -77,7 +86,7 @@ public sealed class VerificationRunner(
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(ProviderTimeout);
-            result = await provider.VerifyAsync(type, subject, idempotencyKey ?? $"tvd_{reservation.CallId:N}", timeout.Token);
+            result = await source.VerifyAsync(type, subject, idempotencyKey ?? $"tvd_{reservation.CallId:N}", timeout.Token);
         }
         catch (Exception ex)
         {
@@ -92,14 +101,14 @@ public sealed class VerificationRunner(
         await using (var session = await tenants.BeginAsync(scope, CancellationToken.None))
         {
             refundedBalance = await verifications.CompleteAsync(session, reservation.CallId, billable,
-                ToStoredJson(result, provider.Environment), result.Message, CancellationToken.None);
+                ToStoredJson(result, source.Environment), result.Message, CancellationToken.None);
             await session.CommitAsync(CancellationToken.None);
         }
 
         return new VerificationOutcome(
-            reservation.CallId, type, provider.Environment, StatusOf(result.Outcome), result.Identity, result.Message,
-            reservation.PriceKobo, Refunded: !billable,
-            BalanceAfterKobo: refundedBalance ?? reservation.BalanceAfterKobo,
+            reservation.CallId, type, source.Environment, StatusOf(result.Outcome), result.Identity, result.Message,
+            reservation.PriceKobo, Refunded: !billable && !testMode,
+            BalanceAfterKobo: testMode ? null : refundedBalance ?? reservation.BalanceAfterKobo,
             createdAt, Replayed: false);
     }
 
@@ -126,7 +135,7 @@ public sealed class VerificationRunner(
         } : null,
     });
 
-    private VerificationOutcome FromStored(StoredVerification stored)
+    private static VerificationOutcome FromStored(StoredVerification stored, IIdentityProvider provider)
     {
         if (stored.Status == "pending" || stored.ResultJson is null)
             return new VerificationOutcome(stored.CallId, stored.VerificationType, provider.Environment, "pending", null,
@@ -142,6 +151,6 @@ public sealed class VerificationRunner(
             : null;
         return new VerificationOutcome(stored.CallId, stored.VerificationType, S(root, "environment") ?? provider.Environment,
             S(root, "verdict") ?? (stored.Status == "succeeded" ? "match" : "provider_error"), identity, S(root, "message"),
-            stored.AmountKobo, Refunded: stored.Status == "failed", null, stored.CreatedAt, Replayed: true);
+            stored.AmountKobo, Refunded: stored.Status == "failed" && stored.AmountKobo > 0, null, stored.CreatedAt, Replayed: true);
     }
 }

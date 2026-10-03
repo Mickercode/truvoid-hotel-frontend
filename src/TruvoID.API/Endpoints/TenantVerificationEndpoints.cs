@@ -20,11 +20,9 @@ public static class TenantVerificationEndpoints
                 .RequireAuthenticatedUser())
             .RequireRateLimiting("verify");
 
-        // Sandbox discoverability: lets integrators fetch the test numbers programmatically.
-        app.MapGet("/v1/verify/test-numbers", (VerificationRunner runner) => runner.Environment == "sandbox"
-                ? Results.Ok(SandboxIdentityProvider.TestNumbers.ToDictionary(
-                    kv => kv.Key, kv => new { match = kv.Value.Match, noMatch = kv.Value.NoMatch, providerError = kv.Value.Error }))
-                : Results.NotFound(new { error = "Test numbers are only available in the sandbox environment." }))
+        // Test numbers for test mode — available everywhere, since every workspace has test mode.
+        app.MapGet("/v1/verify/test-numbers", () => Results.Ok(SandboxIdentityProvider.TestNumbers.ToDictionary(
+                kv => kv.Key, kv => new { match = kv.Value.Match, noMatch = kv.Value.NoMatch, providerError = kv.Value.Error })))
             .AllowAnonymous();
         return app;
     }
@@ -34,15 +32,29 @@ public static class TenantVerificationEndpoints
         string type,
         VerifyRequest request,
         VerificationRunner runner,
+        OrganizationSetupStore setup,
         CancellationToken ct)
     {
         try
         {
+            // Mode: an API key's own environment wins (trv_test_ / trv_live_); the dashboard sends
+            // X-TruvoID-Mode. Anything unspecified is test — live is never the accidental default.
+            var mode = ctx.User.FindFirst("key_environment")?.Value
+                ?? ctx.Request.Headers["X-TruvoID-Mode"].FirstOrDefault()?.Trim().ToLowerInvariant()
+                ?? "test";
+            var testMode = mode != "live";
+            if (!testMode && !await setup.IsLiveEnabledAsync(ctx.GetOrganizationId(), ct))
+                return Results.Json(new
+                {
+                    error = "Live verification unlocks once TruvoID approves your organization profile. Until then, use test mode — it's free.",
+                    code = "live_not_enabled",
+                }, statusCode: StatusCodes.Status403Forbidden);
+
             var idempotencyKey = ctx.Request.Headers["Idempotency-Key"].FirstOrDefault() ?? request.IdempotencyKey;
             var userId = ctx.GetUserId();
             var outcome = await runner.RunAsync(
                 ctx.GetTenantScope(), type, request.Number,
-                userId == Guid.Empty ? null : userId, ctx.GetApiKeyId(), idempotencyKey, ct);
+                userId == Guid.Empty ? null : userId, ctx.GetApiKeyId(), idempotencyKey, ct, testMode);
 
             var body = new
             {

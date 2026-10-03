@@ -43,6 +43,7 @@ public static class AdminDashboardEndpoints
         PostgresApiKeyStore keys,
         NpgsqlDataSource controlPlane,
         TenantConnectionFactory tenants,
+        OrganizationSetupStore setup,
         IAuditService audit,
         CancellationToken ct)
     {
@@ -67,8 +68,10 @@ public static class AdminDashboardEndpoints
                 return Results.NotFound(new { error = "Outlet not found in this tenant." });
         }
 
+        if (await ApiKeyEndpoints.CheckEnvironmentAsync(request.Environment, request.OrganizationId, setup, ct) is { } refusal)
+            return refusal;
         var created = await ApiKeyEndpoints.CreateAsync(
-            keys, request.OrganizationId, request.OutletId, request.Description, ctx.GetUserId(), ct);
+            keys, request.OrganizationId, request.OutletId, request.Description, ctx.GetUserId(), ct, request.Environment);
         await audit.LogAsync(AuditAction.ApiKeyGenerated, "ApiKey", created.Stored.Id,
             ctx.GetUserId(), "User", $"Platform-generated key for {organizationName}", ct);
 
@@ -98,7 +101,7 @@ public static class AdminDashboardEndpoints
         return Results.Ok(new { message = "API key revoked." });
     }
 
-    public sealed record CreateTenantApiKeyRequest(Guid OrganizationId, Guid? OutletId, string? Description);
+    public sealed record CreateTenantApiKeyRequest(Guid OrganizationId, Guid? OutletId, string? Description, string? Environment = null);
 
     private sealed class AdminApiKeyResponse
     {

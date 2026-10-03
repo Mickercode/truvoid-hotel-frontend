@@ -37,12 +37,14 @@ public static class ApiKeyEndpoints
         HttpContext ctx,
         CreateApiKeyRequest request,
         PostgresApiKeyStore keys,
+        OrganizationSetupStore setup,
         IAuditService audit,
         CancellationToken ct)
     {
         var organizationId = ctx.GetOrganizationId();
         if (organizationId == Guid.Empty) return Results.Unauthorized();
-        var key = await CreateAsync(keys, organizationId, null, request.Description, ctx.GetUserId(), ct);
+        if (await CheckEnvironmentAsync(request.Environment, organizationId, setup, ct) is { } refusal) return refusal;
+        var key = await CreateAsync(keys, organizationId, null, request.Description, ctx.GetUserId(), ct, request.Environment);
         await audit.LogAsync(AuditAction.ApiKeyGenerated, "ApiKey", key.Stored.Id, ctx.GetUserId(), "User", key.Stored.Description);
         return Results.Ok(MapResponse(key.Stored, key.RawKey));
     }
@@ -75,12 +77,14 @@ public static class ApiKeyEndpoints
         CreateApiKeyRequest request,
         PostgresApiKeyStore keys,
         TenantConnectionFactory tenants,
+        OrganizationSetupStore setup,
         IAuditService audit,
         CancellationToken ct)
     {
         if (!IsAgencyAdmin(ctx)) return Results.Forbid();
         var organizationId = ctx.GetOrganizationId();
         if (organizationId == Guid.Empty) return Results.Unauthorized();
+        if (await CheckEnvironmentAsync(request.Environment, organizationId, setup, ct) is { } refusal) return refusal;
 
         await using var session = await tenants.BeginAsync(TenantScope.Organization(organizationId), ct);
         await using var type = session.CreateCommand("SELECT org_type FROM tenant");
@@ -91,7 +95,7 @@ public static class ApiKeyEndpoints
         if (await outlet.ExecuteScalarAsync(ct) is null)
             return Results.NotFound(new { error = "Outlet not found in this agency." });
 
-        var key = await CreateAsync(keys, organizationId, outletId, request.Description, ctx.GetUserId(), ct);
+        var key = await CreateAsync(keys, organizationId, outletId, request.Description, ctx.GetUserId(), ct, request.Environment);
         await audit.LogAsync(AuditAction.ApiKeyGenerated, "ApiKey", key.Stored.Id, ctx.GetUserId(), "User", key.Stored.Description);
         return Results.Ok(MapResponse(key.Stored, key.RawKey));
     }
@@ -118,16 +122,34 @@ public static class ApiKeyEndpoints
         Guid? outletId,
         string? description,
         Guid userId,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? environment = null)
     {
+        // A sandbox-only deployment issues test keys whatever is asked for.
+        var env = keys.Environment == "test" ? "test" : NormalizeEnvironment(environment);
+        var tag = $"trv_{env}_";
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        var rawKey = $"{keys.KeyPrefixTag}{secret}";
-        var prefix = rawKey[..(keys.KeyPrefixTag.Length + 8)];
+        var rawKey = $"{tag}{secret}";
+        var prefix = rawKey[..(tag.Length + 8)];
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawKey))).ToLowerInvariant();
         var stored = await keys.CreateAsync(organizationId, outletId, prefix, hash,
-            string.IsNullOrWhiteSpace(description) ? null : description.Trim(), userId == Guid.Empty ? null : userId, ct);
+            string.IsNullOrWhiteSpace(description) ? null : description.Trim(), userId == Guid.Empty ? null : userId, ct, env);
         return (stored, rawKey);
     }
+
+    /// <summary>Keys are test by default; "live" must be asked for explicitly.</summary>
+    internal static string NormalizeEnvironment(string? environment) =>
+        string.Equals(environment?.Trim(), "live", StringComparison.OrdinalIgnoreCase) ? "live" : "test";
+
+    /// <summary>Live keys only for organizations approved to go live; test keys for everyone.</summary>
+    internal static async Task<IResult?> CheckEnvironmentAsync(string? environment, Guid organizationId, OrganizationSetupStore setup, CancellationToken ct) =>
+        NormalizeEnvironment(environment) == "live" && !await setup.IsLiveEnabledAsync(organizationId, ct)
+            ? Results.Json(new
+            {
+                error = "Live keys unlock once TruvoID approves your organization profile. Use a test key until then.",
+                code = "live_not_enabled",
+            }, statusCode: StatusCodes.Status403Forbidden)
+            : null;
 
     private static bool IsAgencyAdmin(HttpContext ctx) =>
         ctx.User.IsInRole("agency_admin") || ctx.User.FindFirst("tenant_role")?.Value == "agency_admin";
@@ -141,10 +163,12 @@ public static class ApiKeyEndpoints
         CreatedAt = key.CreatedAt,
         RawKey = rawKey,
         Scope = key.OutletId.HasValue ? "outlet" : "organization",
-        OutletId = key.OutletId
+        OutletId = key.OutletId,
+        Environment = key.Environment
     };
 
-    public sealed record CreateApiKeyRequest(string? Description);
+    /// <param name="Environment">"test" (default) or "live".</param>
+    public sealed record CreateApiKeyRequest(string? Description, string? Environment = null);
 }
 
 public sealed class ApiKeyResponse
@@ -157,4 +181,6 @@ public sealed class ApiKeyResponse
     public string? RawKey { get; init; }
     public string Scope { get; init; } = "organization";
     public Guid? OutletId { get; init; }
+    /// <summary>"test" or "live".</summary>
+    public string Environment { get; init; } = "live";
 }

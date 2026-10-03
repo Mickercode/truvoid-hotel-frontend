@@ -192,9 +192,11 @@ builder.Services.AddHttpClient(IdAccessIdentityProvider.HttpClientName, client =
     client.BaseAddress = new Uri((builder.Configuration["IdAccess:BaseUrl"] ?? "https://idaccess.info/v1").TrimEnd('/') + "/");
     client.Timeout = VerificationRunner.ProviderTimeout + TimeSpan.FromSeconds(5);
 });
+// Every workspace has free test mode, served by this provider (see VerificationRunner).
+builder.Services.AddSingleton<SandboxIdentityProvider>();
 builder.Services.AddSingleton<IIdentityProvider>(sp => verificationProvider switch
 {
-    "sandbox" => new SandboxIdentityProvider(),
+    "sandbox" => sp.GetRequiredService<SandboxIdentityProvider>(),
     "idaccess" => new IdAccessIdentityProvider(
         sp.GetRequiredService<IHttpClientFactory>(),
         builder.Configuration["IdAccess:ApiKey"] ?? Environment.GetEnvironmentVariable("IDACCESS_API_KEY"),

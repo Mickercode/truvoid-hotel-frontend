@@ -14,7 +14,11 @@ public sealed record PostgresApiKey(
     DateTime CreatedAt,
     DateTime? LastUsedAt,
     DateTime? RevokedAt,
-    long CallCount);
+    long CallCount)
+{
+    /// <summary>"test" or "live", from the prefix TruvoID issued the key with.</summary>
+    public string Environment => KeyPrefix.StartsWith("trv_test_", StringComparison.Ordinal) ? "test" : "live";
+}
 
 /// <param name="environment">"live" or "test". A sandbox deployment issues test keys
 /// (trv_test_…) so a key's prefix always says which environment it belongs to.</param>
@@ -57,7 +61,8 @@ public sealed class PostgresApiKeyStore(NpgsqlDataSource dataSource, string envi
         string keyHash,
         string? description,
         Guid? createdByUserId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? environment = null)
     {
         await using var command = dataSource.CreateCommand("""
             INSERT INTO control.api_key
@@ -68,7 +73,7 @@ public sealed class PostgresApiKeyStore(NpgsqlDataSource dataSource, string envi
             RETURNING id, organization_id, outlet_id, key_prefix, key_hash,
                       customer_label, status, created_at, last_used_at, revoked_at, call_count
             """);
-        command.Parameters.AddWithValue("environment", Environment);
+        command.Parameters.AddWithValue("environment", environment ?? Environment);
         command.Parameters.AddWithValue("organizationId", organizationId);
         command.Parameters.AddWithValue("outletId", (object?)outletId ?? DBNull.Value);
         command.Parameters.AddWithValue("keyPrefix", keyPrefix);

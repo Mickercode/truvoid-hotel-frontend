@@ -60,6 +60,7 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
             new Claim("institution_id", key.OrganizationId.ToString()),
             new Claim("organization_id", key.OrganizationId.ToString()),
             new Claim("api_key_id", key.Id.ToString()),
+            new Claim("key_environment", key.Environment), // "test" or "live": decides the verification mode
             new Claim(ClaimTypes.Role, "ApiKey")
         };
         if (key.OutletId is { } outletId)

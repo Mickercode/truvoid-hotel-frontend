@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Npgsql;
+using TruvoID.Infrastructure.Postgres;
+using TruvoID.Infrastructure.Services;
 
 namespace TruvoID.API.Endpoints;
 
@@ -13,8 +15,64 @@ public static class AdminOrganizationEndpoints
         group.MapGet("/", List);
         group.MapPost("/{id:guid}/suspend", (Guid id, NpgsqlDataSource db, CancellationToken ct) => SetStatus(id, "suspended", db, ct));
         group.MapPost("/{id:guid}/reactivate", (Guid id, NpgsqlDataSource db, CancellationToken ct) => SetStatus(id, "active", db, ct));
+
+        // Profile review: approval is what moves an Institution from test mode to live.
+        group.MapGet("/{id:guid}/setup", async (Guid id, OrganizationSetupStore setup, CancellationToken ct) =>
+            Results.Ok(OrganizationSetupEndpoints.ToResponse(await setup.GetAsync(id, ct))));
+        group.MapGet("/{id:guid}/documents/{documentId:guid}", async (Guid id, Guid documentId, OrganizationSetupStore setup, CancellationToken ct) =>
+            await setup.GetDocumentAsync(id, documentId, ct) is { } doc
+                ? Results.File(doc.Content, doc.ContentType, doc.FileName)
+                : Results.NotFound(new { error = "Document not found." }));
+        group.MapPost("/{id:guid}/setup/approve", (HttpContext ctx, Guid id, ReviewRequest? request, OrganizationSetupStore setup,
+                NpgsqlDataSource db, IEmailService email, ILoggerFactory loggers, CancellationToken ct) =>
+            Review(ctx, id, approve: true, request?.Note, setup, db, email, loggers, ct));
+        group.MapPost("/{id:guid}/setup/request-changes", (HttpContext ctx, Guid id, ReviewRequest? request, OrganizationSetupStore setup,
+                NpgsqlDataSource db, IEmailService email, ILoggerFactory loggers, CancellationToken ct) =>
+            Review(ctx, id, approve: false, request?.Note, setup, db, email, loggers, ct));
         return app;
     }
+
+    private static async Task<IResult> Review(
+        HttpContext ctx, Guid organizationId, bool approve, string? note, OrganizationSetupStore setup,
+        NpgsqlDataSource db, IEmailService email, ILoggerFactory loggers, CancellationToken ct)
+    {
+        try
+        {
+            if (!await setup.ReviewAsync(organizationId, approve, note, ctx.GetUserId(), ct))
+                return Results.Conflict(new { error = "Only a submitted profile can be reviewed." });
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+
+        if (approve)
+        {
+            // Tell the organization's admins they can go live. Email failures never undo the approval.
+            await using var admins = db.CreateCommand("""
+                SELECT u.email, coalesce(u.full_name, u.email), o.name
+                FROM control.app_user u JOIN control.organization o ON o.id = u.organization_id
+                WHERE u.organization_id = @id AND u.role IN ('institution_admin', 'agency_admin') AND u.status = 'active'
+                """);
+            admins.Parameters.AddWithValue("id", organizationId);
+            await using var reader = await admins.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                try
+                {
+                    await email.SendAsync(reader.GetString(0), reader.GetString(1), "You're approved to go live on TruvoID",
+                        EmailTemplates.Approved(reader.GetString(2), reader.GetString(1)));
+                }
+                catch (Exception ex)
+                {
+                    loggers.CreateLogger(nameof(AdminOrganizationEndpoints)).LogError(ex, "Approval email failed for organization {OrganizationId}", organizationId);
+                }
+            }
+        }
+        return Results.Ok(new { message = approve ? "Profile approved. Live verification is now enabled." : "Sent back to the organization with your note." });
+    }
+
+    public sealed record ReviewRequest(string? Note);
 
     private static async Task<IResult> List(NpgsqlDataSource db, CancellationToken ct)
     {
