@@ -27,6 +27,7 @@ if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue"
         ?? throw new InvalidOperationException("ConnectionStrings:PostgresMigrator is not set."));
     using var loggerFactory = LoggerFactory.Create(logging => logging.AddConsole());
     var logger = loggerFactory.CreateLogger("Postgres");
+    await PostgresMigrator.EnsureNotSuperuserAsync(migratorConnectionString);
 
     if (args[0] == "migrate")
     {

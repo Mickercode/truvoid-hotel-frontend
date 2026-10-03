@@ -36,6 +36,27 @@ public static partial class PostgresMigrator
     /// <summary>True for a plain lowercase Postgres identifier that is safe to splice into DDL unquoted.</summary>
     public static bool IsSafeIdentifier(string value) => IdentifierPattern().IsMatch(value);
 
+    /// <summary>
+    /// Refuses to run DDL as a superuser. Anything a superuser creates is owned by it,
+    /// so the real migrator role can't migrate it afterwards — every later deploy then
+    /// fails with "permission denied for schema org_…". Use the dedicated migrator role.
+    /// </summary>
+    public static async Task EnsureNotSuperuserAsync(string connectionString, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand("SELECT current_user, rolsuper FROM pg_roles WHERE rolname = current_user", conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return;
+        // Printed on every admin command so deploy logs show which role ran it.
+        Console.WriteLine($"Postgres admin command connected as role '{reader.GetString(0)}'.");
+        if (reader.GetBoolean(1))
+            throw new InvalidOperationException(
+                $"ConnectionStrings:PostgresMigrator connects as superuser '{reader.GetString(0)}'. " +
+                "Use the dedicated migrator role (truvo_migrator) — the same value on the API and the worker — " +
+                "or new workspaces will be owned by the superuser and later migrations will fail.");
+    }
+
     public static IReadOnlyList<MigrationScript> LoadEmbeddedControlPlaneScripts() => LoadEmbedded(ControlPlaneResourcePrefix);
 
     public static IReadOnlyList<MigrationScript> LoadEmbeddedTenantScripts() => LoadEmbedded(TenantResourcePrefix);
