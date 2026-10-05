@@ -141,7 +141,7 @@ function Shell({
   const isOutlet = Boolean(profile.outletId);
   const environment = useEnvironment();
   const liveEnabled = Boolean(profile.liveEnabled);
-  const [mode, changeMode] = useMode(liveEnabled);
+  const [mode, changeMode] = useMode();
   // Platform staff run TruvoID; they don't have a workspace of their own. Outlet users
   // get only the outlet-scoped surfaces — setup, team, outlets, and org API keys are
   // organization-administrator tools the API would reject anyway.
@@ -217,7 +217,7 @@ function Shell({
                   className={mode === "test" ? "active test" : ""} onClick={() => changeMode("test")}>
                   Test
                 </button>
-                <button type="button" role="radio" aria-checked={mode === "live"} disabled={!liveEnabled}
+                <button type="button" role="radio" aria-checked={mode === "live"}
                   title={liveEnabled ? "Live verifications are charged to your wallet" : goLiveHint}
                   className={mode === "live" ? "active live" : ""} onClick={() => changeMode("live")}>
                   Live
@@ -231,6 +231,12 @@ function Shell({
         {environment === "sandbox" ? (
           <div className="sandbox-banner" role="note">
             <strong>SANDBOX</strong> Test environment — no real identity lookups or payments.
+          </div>
+        ) : !isAdmin && mode === "live" && !liveEnabled ? (
+          <div className="sandbox-banner" role="note">
+            <strong>LIVE MODE LOCKED</strong> Your profile isn't approved yet, so live verifications will be refused.{" "}
+            <button type="button" className="link-button" onClick={() => changeMode("test")}>switch back to Test</button>{" "}
+            or <Link to="/setup">complete your profile</Link>.
           </div>
         ) : !isAdmin && mode === "live" ? (
           <div className="sandbox-banner live" role="note">

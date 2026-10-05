@@ -19,8 +19,10 @@ export function setMode(mode: Mode) {
   window.dispatchEvent(new Event(EVENT))
 }
 
-/** Current mode, forced to test when the workspace can't go live yet. */
-export function useMode(liveEnabled: boolean): [Mode, (mode: Mode) => void] {
+/** Current mode. The Test/Live switch is always toggleable; the server still refuses
+ *  live calls for a workspace that isn't approved, so this stays a preference, not a
+ *  permission, and the shell warns when Live is picked too early. */
+export function useMode(): [Mode, (mode: Mode) => void] {
   const [mode, setState] = useState<Mode>(getMode())
   useEffect(() => {
     const sync = () => setState(getMode())
@@ -28,6 +30,5 @@ export function useMode(liveEnabled: boolean): [Mode, (mode: Mode) => void] {
     window.addEventListener('storage', sync) // other tabs
     return () => { window.removeEventListener(EVENT, sync); window.removeEventListener('storage', sync) }
   }, [])
-  useEffect(() => { if (!liveEnabled && mode === 'live') setMode('test') }, [liveEnabled, mode])
-  return [liveEnabled ? mode : 'test', setMode]
+  return [mode, setMode]
 }
