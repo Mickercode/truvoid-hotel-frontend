@@ -433,6 +433,38 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Verification_history_works_for_free_test_mode_calls()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var email = $"history-{Guid.NewGuid():N}@gettruvoid.com";
+        await identities.RegisterOrganizationAsync(
+            $"History {Guid.NewGuid():N}", OrganizationType.Institution, "History Admin", email, "CorrectPass123");
+
+        var protector = TenantCredentialProtector.FromBase64("k1", ApiFactory.TenantCredentialKey);
+        await new TenantProvisioner(factory.MigratorConnectionString, protector, NullLogger.Instance).ProvisionPendingAsync();
+
+        var client = factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" });
+        var token = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        // A free test-mode call has no wallet charge, so ledger_entry_id is null.
+        var verify = new HttpRequestMessage(HttpMethod.Post, "/v1/verify/nin")
+        {
+            Content = JsonContent.Create(new { number = "00000000001" }),
+        };
+        verify.Headers.Add("X-TruvoID-Mode", "test");
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(verify)).StatusCode);
+
+        var history = await client.GetAsync("/v1/tenant/verification-calls");
+        Assert.Equal(HttpStatusCode.OK, history.StatusCode);
+        var items = (await history.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items");
+        Assert.True(items.GetArrayLength() >= 1);
+        Assert.Equal(JsonValueKind.Null, items[0].GetProperty("ledgerEntryId").ValueKind);
+    }
+
     private static HttpRequestMessage SignedWebhook(string body)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments/flutterwave/webhook")

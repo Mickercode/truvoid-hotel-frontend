@@ -51,12 +51,14 @@ public static class TenantVerificationHistoryEndpoints
         await using var reader = await command.ExecuteReaderAsync(ct);
         var calls = new List<VerificationHistoryItem>();
         while (await reader.ReadAsync(ct))
-            calls.Add(new VerificationHistoryItem(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)[..Math.Min(12, reader.GetString(3).Length)], reader.GetGuid(4), reader.GetFieldValue<DateTime>(5), reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTime>(6),
+            calls.Add(new VerificationHistoryItem(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)[..Math.Min(12, reader.GetString(3).Length)],
+                // ledger_entry_id is null for free test-mode calls (they aren't charged).
+                reader.IsDBNull(4) ? null : reader.GetGuid(4), reader.GetFieldValue<DateTime>(5), reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTime>(6),
                 reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetString(9),
                 reader.IsDBNull(10) ? null : reader.GetGuid(10)));
         return Results.Ok(new { page, pageSize, items = calls });
     }
 
-    private sealed record VerificationHistoryItem(Guid Id, string VerificationType, string Status, string SubjectPreview, Guid LedgerEntryId, DateTime CreatedAt, DateTime? CompletedAt,
+    private sealed record VerificationHistoryItem(Guid Id, string VerificationType, string Status, string SubjectPreview, Guid? LedgerEntryId, DateTime CreatedAt, DateTime? CompletedAt,
         string? Verdict, string? FullName, string? Environment, Guid? OutletId);
 }
