@@ -11,6 +11,7 @@ public static class EndpointRegistration
         app.MapAdminOrganizationEndpoints();
         app.MapOrganizationSetupEndpoints();
         app.MapOrganizationBrandingEndpoints();
+        app.MapOrganizationInvitationEndpoints();
         app.MapAdminDashboardEndpoints();
         app.MapApiKeyEndpoints();
         app.MapTenantEndpoints();

@@ -50,8 +50,8 @@ public sealed class OrganizationBrandingStore(NpgsqlDataSource dataSource)
     {
         if (content.Length == 0 || content.Length > 2 * 1024 * 1024)
             throw new ArgumentException("Logo must be between 1 byte and 2 MB.");
-        if (contentType is not ("image/png" or "image/jpeg" or "image/webp" or "image/svg+xml"))
-            throw new ArgumentException("Logo must be PNG, JPEG, WebP, or SVG.");
+        if (contentType is not ("image/png" or "image/jpeg" or "image/webp"))
+            throw new ArgumentException("Logo must be PNG, JPEG, or WebP.");
         await EnsureAsync(organizationId, ct);
         await using var command = dataSource.CreateCommand("""
             UPDATE control.organization_branding

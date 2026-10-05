@@ -72,6 +72,8 @@ public static class ApiKeyEndpoints
 
     private static async Task<IResult> ListTenantKeys(HttpContext ctx, PostgresApiKeyStore keys, CancellationToken ct)
     {
+        // Matches create/revoke on this group: agency administrators only.
+        if (!IsAgencyAdmin(ctx)) return Results.Forbid();
         var organizationId = ctx.GetOrganizationId();
         if (organizationId == Guid.Empty) return Results.Unauthorized();
         return Results.Ok((await keys.ListAsync(organizationId, ct)).Select(k => MapResponse(k)).ToList());

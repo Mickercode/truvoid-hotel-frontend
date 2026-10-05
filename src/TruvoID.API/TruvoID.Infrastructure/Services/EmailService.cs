@@ -42,7 +42,15 @@ public class ResendEmailService : IEmailService
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync();
-            throw new InvalidOperationException($"Resend API error {(int)response.StatusCode}: {error}");
+            var hint = response.StatusCode switch
+            {
+                System.Net.HttpStatusCode.Unauthorized =>
+                    " — check Resend__ApiKey / RESEND_API_KEY is a valid Resend API key.",
+                System.Net.HttpStatusCode.Forbidden =>
+                    $" — the sending domain for '{_fromAddress}' must be verified in Resend (set EMAIL_FROM_ADDRESS to a verified sender).",
+                _ => "",
+            };
+            throw new InvalidOperationException($"Resend API error {(int)response.StatusCode}: {error}{hint}");
         }
     }
 }

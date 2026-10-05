@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 using TruvoID.API.Auth;
 using Npgsql;
@@ -143,6 +144,10 @@ if (args.FirstOrDefault() is "migrate" or "provision-tenants" or "relay-revenue"
 var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
 builder.WebHost.UseUrls($"http://+:{port}");
 
+// Outer backstop for request sizes (uploads get their own stricter checks). Without
+// this Kestrel buffers an arbitrarily large body into memory.
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 12 * 1024 * 1024);
+
 var postgresConnectionString = NormalizePostgresConnectionString(
     builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException(
@@ -156,6 +161,7 @@ builder.Services.AddSingleton(sp => new PostgresApiKeyStore(
     string.Equals(builder.Configuration["Verification:Provider"], "sandbox", StringComparison.OrdinalIgnoreCase) ? "test" : "live"));
 builder.Services.AddSingleton<OrganizationSetupStore>();
 builder.Services.AddSingleton<OrganizationBrandingStore>();
+builder.Services.AddSingleton<OrganizationInvitationStore>();
 builder.Services.AddSingleton(CreateTenantCredentialProtector(builder.Configuration));
 builder.Services.AddSingleton<TenantConnectionFactory>(sp => new TenantConnectionFactory(
     sp.GetRequiredService<NpgsqlDataSource>(),
@@ -207,30 +213,15 @@ builder.Services.AddSingleton<IIdentityProvider>(sp => verificationProvider swit
 builder.Services.AddScoped<VerificationRunner>();
 
 // ── JWT auth ──────────────────────────────────────────────────────────────
-// Railway sets Jwt__SecretKey / Jwt__Issuer / Jwt__Audience (maps to Jwt:SecretKey
-// etc. via the env var provider) — must read the same keys AuthEndpoints uses to
-// sign tokens, or issued tokens fail validation here.
-var jwtSecret = builder.Configuration["Jwt:SecretKey"]
-    ?? Environment.GetEnvironmentVariable("JWT_SECRET")
-    ?? (builder.Environment.IsDevelopment() ? "dev-secret-key-change-in-production-32chars!!!" : null);
-if (string.IsNullOrWhiteSpace(jwtSecret))
-    throw new InvalidOperationException("Jwt:SecretKey (or JWT_SECRET) is required outside Development.");
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "TruvoID";
-var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "TruvoID";
+// Resolve once and share: AuthEndpoints signs with the same instance this validates
+// with, so the two can never drift to different secrets.
+var jwtSettings = JwtSettings.Resolve(builder.Configuration, builder.Environment);
+builder.Services.AddSingleton(jwtSettings);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
-            ValidateIssuer = true,
-            ValidIssuer = jwtIssuer,
-            ValidateAudience = true,
-            ValidAudience = jwtAudience,
-            ClockSkew = TimeSpan.Zero
-        };
+        options.TokenValidationParameters = jwtSettings.ValidationParameters;
     })
     // Lets /v1/tenant/verification-calls/reserve accept an institution's own API key (X-API-Key header) as
     // an alternative to a JWT — see ApiKeyAuthenticationHandler.
@@ -238,6 +229,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization(options =>
 {
+    // Deny by default: an endpoint that forgets to declare its policy requires a signed-in
+    // user rather than silently becoming anonymous. Public endpoints opt out with AllowAnonymous.
+    options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser().Build();
+
     // Platform staff only. Must NOT include "Admin": that is the legacy claim every
     // institution_admin / agency_admin carries, so any self-registered Organization
     // would otherwise reach /v1/admin/* (list all orgs, credit its own wallet, ...).
@@ -249,8 +245,10 @@ builder.Services.AddAuthorization(options =>
               .RequireRole("Admin", "institution_admin", "agency_admin", "agency_user"));
 });
 
+// Production default only. Development supplies http://localhost:5173 via appsettings.Development.json,
+// so a misconfigured production deploy never silently allows a localhost origin.
 var corsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>()
-    ?? ["https://gettruvoid.com", "https://www.gettruvoid.com", "http://localhost:5173"];
+    ?? ["https://gettruvoid.com", "https://www.gettruvoid.com"];
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy => policy
@@ -265,6 +263,7 @@ builder.Services.AddCors(options =>
 // "verify": per API key (or Organization) so a leaked key can't drain a wallet at line rate.
 var authPerMinute = builder.Configuration.GetValue("RateLimits:AuthPerMinute", 20);
 var verifyPerMinute = builder.Configuration.GetValue("RateLimits:VerifyPerMinute", 120);
+var webhookPerMinute = builder.Configuration.GetValue("RateLimits:WebhookPerMinute", 300);
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -287,6 +286,12 @@ builder.Services.AddRateLimiter(options =>
             TokenLimit = verifyPerMinute, TokensPerPeriod = verifyPerMinute,
             ReplenishmentPeriod = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true,
         }));
+    // The Flutterwave webhook is anonymous, so cap it per client IP to blunt abuse.
+    options.AddPolicy("webhook", http => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+        ClientIp(http), _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+        {
+            PermitLimit = webhookPerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
+        }));
 });
 
 // ── Application services ──────────────────────────────────────────────────
@@ -294,6 +299,17 @@ builder.Services.AddScoped<IAuditService, PostgresAuditService>();
 
 // ── Build & map endpoints ─────────────────────────────────────────────────
 var app = builder.Build();
+
+// Behind Cloudflare → Railway the socket peer is the proxy, so the real client IP
+// (used by the "auth" rate limit and audit) and the original scheme come from
+// forwarded headers. Trust the immediate proxy; the default only trusts loopback.
+var forwardedHeaders = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+};
+forwardedHeaders.KnownIPNetworks.Clear();
+forwardedHeaders.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedHeaders);
 
 if (app.Environment.IsDevelopment())
 {
@@ -345,16 +361,31 @@ if (!identityProvider.IsConfigured)
 else
     app.Logger.LogInformation("Identity provider: {Provider} ({Environment}).", verificationProvider, identityProvider.Environment);
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok", environment = identityProvider.Environment })).AllowAnonymous();
+// Email powers invitations and password resets. A missing key used to fail silently at
+// send time; say so loudly at startup so a misnamed Railway variable is obvious.
+var emailConfigured = !string.IsNullOrWhiteSpace(resendApiKey);
+if (emailConfigured)
+    app.Logger.LogInformation("Email: Resend configured (from {From}).",
+        Environment.GetEnvironmentVariable("EMAIL_FROM_ADDRESS") ?? "TruvoID <noreply@gettruvoid.com>");
+else
+    app.Logger.LogWarning("Email is NOT configured (set Resend__ApiKey or RESEND_API_KEY). Invitations and password-reset emails cannot be delivered.");
+
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "ok",
+    environment = identityProvider.Environment,
+    email = emailConfigured ? "configured" : "not_configured",
+})).AllowAnonymous();
 app.MapTruvoIdEndpoints();
 
 app.Run();
 
-// Behind Cloudflare → Railway's edge, RemoteIpAddress is the proxy. Cloudflare's header is
-// set by Cloudflare itself; X-Forwarded-For's first hop is the client per Railway's edge.
+// UseForwardedHeaders has already resolved RemoteIpAddress from X-Forwarded-For
+// (trusting the proxy chain), so we do not read X-Forwarded-For directly — a client
+// can forge that header, which is exactly how the rate-limit key was spoofable.
+// CF-Connecting-IP is preferred when present because Cloudflare sets it authoritatively.
 static string ClientIp(HttpContext http) =>
     http.Request.Headers["CF-Connecting-IP"].FirstOrDefault()
-    ?? http.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
     ?? http.Connection.RemoteIpAddress?.ToString()
     ?? "unknown";
 
@@ -363,31 +394,43 @@ static string ClientIp(HttpContext http) =>
 // returns 500. Accept either form and convert URLs to key/value.
 static string NormalizePostgresConnectionString(string value)
 {
-    if (!value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) &&
-        !value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
-        return value;
-
-    var uri = new Uri(value);
-    var userInfo = uri.UserInfo.Split(':', 2);
-    var builder = new NpgsqlConnectionStringBuilder
+    NpgsqlConnectionStringBuilder builder;
+    if (value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
     {
-        Host = uri.Host,
-        Port = uri.Port > 0 ? uri.Port : 5432,
-        Database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/')),
-        Username = Uri.UnescapeDataString(userInfo[0]),
-        Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : null
-    };
+        var uri = new Uri(value);
+        var userInfo = uri.UserInfo.Split(':', 2);
+        builder = new NpgsqlConnectionStringBuilder
+        {
+            Host = uri.Host,
+            Port = uri.Port > 0 ? uri.Port : 5432,
+            Database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/')),
+            Username = Uri.UnescapeDataString(userInfo[0]),
+            Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : null
+        };
 
-    var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
-    builder.SslMode = query["sslmode"]?.ToLowerInvariant() switch
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        builder.SslMode = query["sslmode"]?.ToLowerInvariant() switch
+        {
+            "disable" => SslMode.Disable,
+            "allow" => SslMode.Allow,
+            "require" => SslMode.Require,
+            "verify-ca" => SslMode.VerifyCA,
+            "verify-full" => SslMode.VerifyFull,
+            // Require (not Prefer): never silently fall back to an unencrypted connection.
+            // Certificate validation needs an explicit sslmode=verify-full plus a root cert.
+            _ => SslMode.Require
+        };
+    }
+    else
     {
-        "disable" => SslMode.Disable,
-        "allow" => SslMode.Allow,
-        "require" => SslMode.Require,
-        "verify-ca" => SslMode.VerifyCA,
-        "verify-full" => SslMode.VerifyFull,
-        _ => SslMode.Prefer
-    };
+        builder = new NpgsqlConnectionStringBuilder(value);
+    }
+
+    // The slim runtime image ships no Kerberos libraries, so Npgsql logs a noisy
+    // (non-fatal) "libgssapi_krb5.so.2" warning when it probes for GSS encryption.
+    // Disable it; TLS (SslMode) is unaffected.
+    builder.GssEncryptionMode = GssEncryptionMode.Disable;
     return builder.ConnectionString;
 }
 
@@ -397,3 +440,6 @@ static TenantCredentialProtector CreateTenantCredentialProtector(IConfiguration 
         configuration["Postgres:TenantCredentialKeyId"] ?? "k1",
         configuration["Postgres:TenantCredentialKey"]
             ?? throw new InvalidOperationException("Postgres:TenantCredentialKey is not set."));
+
+// Exposed so the integration tests can host this API with WebApplicationFactory<Program>.
+public partial class Program;

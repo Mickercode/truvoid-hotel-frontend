@@ -31,6 +31,8 @@ public static class TenantTeamEndpoints
 
     private static async Task<IResult> List(HttpContext ctx, ControlPlaneIdentityStore identities, CancellationToken ct)
     {
+        // Team emails/roles/statuses are administrator-only information.
+        if (!IsAdmin(ctx)) return Results.Forbid();
         return Results.Ok(await identities.ListTeamAsync(ctx.GetOrganizationId(), ct));
     }
 
@@ -93,6 +95,8 @@ public static class TenantTeamEndpoints
     private static async Task<IResult> ChangeStatus(HttpContext ctx, Guid userId, string status, ControlPlaneIdentityStore identities, CancellationToken ct)
     {
         if (!IsAdmin(ctx)) return Results.Forbid();
+        if (userId == ctx.GetUserId())
+            return Results.BadRequest(new { error = "You can't change your own access. Ask another administrator." });
         return await identities.SetUserStatusAsync(ctx.GetOrganizationId(), userId, status, ct)
             ? Results.Ok(new { message = $"Team member {status}." })
             : Results.NotFound(new { error = "Team member not found." });

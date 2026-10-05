@@ -10,9 +10,17 @@ public static class FlutterwavePaymentEndpoints
 {
     public static IEndpointRouteBuilder MapFlutterwavePaymentEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/v1/tenant/wallet/topups/flutterwave/initialize", Initialize).RequireAuthorization();
-        app.MapPost("/v1/tenant/wallet/topups/flutterwave/verify", Verify).RequireAuthorization();
-        app.MapPost("/v1/payments/flutterwave/webhook", Webhook).AllowAnonymous();
+        // Funding moves real money, so it's organization-administrator only — not any
+        // signed-in staff member or agency user.
+        var topups = app.MapGroup("/v1/tenant/wallet/topups/flutterwave")
+            .RequireAuthorization("TenantManager")
+            .AddEndpointFilter(async (context, next) => context.HttpContext.IsOrganizationAdmin()
+                ? await next(context)
+                : Results.Json(new { error = "Only your organization's administrator can fund the wallet." },
+                    statusCode: StatusCodes.Status403Forbidden));
+        topups.MapPost("/initialize", Initialize);
+        topups.MapPost("/verify", Verify);
+        app.MapPost("/v1/payments/flutterwave/webhook", Webhook).AllowAnonymous().RequireRateLimiting("webhook");
         return app;
     }
 
@@ -21,9 +29,13 @@ public static class FlutterwavePaymentEndpoints
         InitializeRequest request,
         TenantConnectionFactory tenants,
         FlutterwavePaymentService flutterwave,
+        IConfiguration configuration,
+        ILoggerFactory loggers,
         CancellationToken ct)
     {
         if (request.AmountNaira < 50000) return Results.BadRequest(new { error = "Minimum wallet funding is NGN 50,000." });
+        if (!IsAllowedRedirect(request.RedirectUrl, configuration))
+            return Results.BadRequest(new { error = "The payment redirect URL is not an allowed application URL." });
         var organizationId = ctx.GetOrganizationId();
         var txRef = $"trv_{organizationId:N}_{Guid.NewGuid():N}";
         await using (var session = await tenants.BeginAsync(TenantScope.Organization(organizationId), ct))
@@ -44,7 +56,10 @@ public static class FlutterwavePaymentEndpoints
         }
         catch (Exception ex)
         {
-            return Results.Problem("Payment checkout could not be initialized.", statusCode: StatusCodes.Status502BadGateway, extensions: new Dictionary<string, object?> { ["error"] = ex.Message });
+            loggers.CreateLogger(nameof(FlutterwavePaymentEndpoints))
+                .LogError(ex, "Flutterwave checkout initialization failed for {Reference}", txRef);
+            return Results.Problem("Payment checkout could not be initialized. Please try again or use bank transfer.",
+                statusCode: StatusCodes.Status502BadGateway);
         }
     }
 
@@ -54,6 +69,7 @@ public static class FlutterwavePaymentEndpoints
         FlutterwavePaymentService flutterwave,
         TenantConnectionFactory tenants,
         TenantWalletService wallets,
+        ILoggerFactory loggers,
         CancellationToken ct)
     {
         try
@@ -67,7 +83,9 @@ public static class FlutterwavePaymentEndpoints
         }
         catch (Exception ex)
         {
-            return Results.BadRequest(new { error = ex.Message });
+            loggers.CreateLogger(nameof(FlutterwavePaymentEndpoints))
+                .LogWarning(ex, "Flutterwave verification failed for reference {Reference}", request.TransactionReference);
+            return Results.BadRequest(new { error = "We could not verify this payment. If you were debited, contact support." });
         }
     }
 
@@ -78,14 +96,41 @@ public static class FlutterwavePaymentEndpoints
         if (string.IsNullOrWhiteSpace(expected) || string.IsNullOrWhiteSpace(received) || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(received)))
             return Results.Unauthorized();
 
-        using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: ct);
-        var data = document.RootElement.GetProperty("data");
-        if (!string.Equals(data.GetProperty("status").GetString(), "successful", StringComparison.OrdinalIgnoreCase)) return Results.Ok();
-        var txRef = data.GetProperty("tx_ref").GetString() ?? "";
-        var parts = txRef.Split('_');
-        if (parts.Length < 3 || !Guid.TryParse(parts[1], out var organizationId)) return Results.BadRequest(new { error = "Invalid transaction reference." });
-        var payment = new FlutterwaveVerification(txRef, data.GetProperty("id").ToString(), "successful", data.GetProperty("amount").GetDecimal(), data.GetProperty("currency").GetString() ?? "");
-        return await CreditPayment(organizationId, payment, tenants, wallets, ct);
+        // Bounded body + defensive parsing: this endpoint is anonymous, so a malformed
+        // or oversized payload must never turn into an unhandled 500.
+        if (request.ContentLength is > 64 * 1024)
+            return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+
+        JsonDocument document;
+        try
+        {
+            document = await JsonDocument.ParseAsync(request.Body, cancellationToken: ct);
+        }
+        catch (JsonException)
+        {
+            return Results.BadRequest(new { error = "Malformed webhook payload." });
+        }
+
+        using (document)
+        {
+            if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+                return Results.BadRequest(new { error = "Malformed webhook payload." });
+            if (!data.TryGetProperty("status", out var statusElement)
+                || !string.Equals(statusElement.GetString(), "successful", StringComparison.OrdinalIgnoreCase))
+                return Results.Ok();
+            var txRef = data.TryGetProperty("tx_ref", out var txRefElement) ? txRefElement.GetString() ?? "" : "";
+            var parts = txRef.Split('_');
+            if (parts.Length < 3 || !Guid.TryParse(parts[1], out var organizationId))
+                return Results.BadRequest(new { error = "Invalid transaction reference." });
+            if (!data.TryGetProperty("id", out var idElement)
+                || !data.TryGetProperty("amount", out var amountElement) || amountElement.ValueKind != JsonValueKind.Number
+                || !data.TryGetProperty("currency", out var currencyElement))
+                return Results.BadRequest(new { error = "Malformed webhook payload." });
+
+            var payment = new FlutterwaveVerification(txRef, idElement.ToString(), "successful",
+                amountElement.GetDecimal(), currencyElement.GetString() ?? "");
+            return await CreditPayment(organizationId, payment, tenants, wallets, ct);
+        }
     }
 
     private static async Task<IResult> CreditPayment(Guid organizationId, FlutterwaveVerification payment, TenantConnectionFactory tenants, TenantWalletService wallets, CancellationToken ct)
@@ -110,6 +155,29 @@ public static class FlutterwavePaymentEndpoints
         await update.ExecuteNonQueryAsync(ct);
         await session.CommitAsync(ct);
         return Results.Ok(new { status = "credited", mutation.BalanceAfterKobo, mutation.LedgerEntryId });
+    }
+
+    /// <summary>
+    /// A caller-supplied redirect URL is handed to Flutterwave, which sends the user there after
+    /// checkout. Without an allowlist this is an open redirect (phishing through a trusted payment
+    /// page), so only same-origin app URLs (App:BaseUrl / Cors:Origins) are accepted.
+    /// </summary>
+    private static bool IsAllowedRedirect(string? url, IConfiguration configuration)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var redirect))
+            return false;
+        if (redirect.Scheme is not ("http" or "https"))
+            return false;
+
+        var allowedOrigins = new List<string>();
+        if (configuration["App:BaseUrl"] is { Length: > 0 } appBaseUrl)
+            allowedOrigins.Add(appBaseUrl);
+        allowedOrigins.AddRange(configuration.GetSection("Cors:Origins").Get<string[]>() ?? []);
+
+        var redirectOrigin = redirect.GetLeftPart(UriPartial.Authority);
+        return allowedOrigins
+            .Select(o => Uri.TryCreate(o, UriKind.Absolute, out var u) ? u.GetLeftPart(UriPartial.Authority) : null)
+            .Any(o => o is not null && string.Equals(o, redirectOrigin, StringComparison.OrdinalIgnoreCase));
     }
 
     public sealed record InitializeRequest(decimal AmountNaira, string RedirectUrl);

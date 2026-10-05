@@ -19,6 +19,11 @@ public static class OrganizationSetupEndpoints
             try { return await next(context); }
             catch (SetupLockedException ex) { return Results.Conflict(new { error = ex.Message, code = "setup_locked" }); }
         });
+        // The organization profile (and its uploaded documents) is administrator-only.
+        group.AddEndpointFilter(async (context, next) => context.HttpContext.IsOrganizationAdmin()
+            ? await next(context)
+            : Results.Json(new { error = "Only your organization's administrator can edit the organization profile." },
+                statusCode: StatusCodes.Status403Forbidden));
         group.MapGet("/", Get);
         group.MapPut("/{section}", SaveSection);
         group.MapPut("/access-level", SaveAccessLevel);
@@ -67,16 +72,28 @@ public static class OrganizationSetupEndpoints
         return Results.Ok(new { message = "Attestation saved." });
     }
 
+    private const long MaxDocumentBytes = 10 * 1024 * 1024;
+    private static readonly string[] AllowedDocumentTypes = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
+
     private static async Task<IResult> UploadDocument(HttpContext ctx, IFormFile file, [Microsoft.AspNetCore.Mvc.FromForm] string documentType, OrganizationSetupStore setup, CancellationToken ct) // documentType arrives as a multipart field, not a query parameter
     {
         if (string.IsNullOrWhiteSpace(documentType) || file is null)
             return Results.BadRequest(new { error = "Document type and file are required." });
+        // Validate size and type from metadata before buffering the body into memory,
+        // and only trust an allowlisted content type (never the client's raw value —
+        // it is stored and later served back to platform admins).
+        if (file.Length is <= 0 or > MaxDocumentBytes)
+            return Results.BadRequest(new { error = "Documents must be between 1 byte and 10 MB." });
+        if (!AllowedDocumentTypes.Contains(file.ContentType, StringComparer.OrdinalIgnoreCase))
+            return Results.BadRequest(new { error = "Documents must be PDF, PNG, JPEG, or WebP." });
+        var contentType = AllowedDocumentTypes.First(t => string.Equals(t, file.ContentType, StringComparison.OrdinalIgnoreCase));
+
         await using var stream = file.OpenReadStream();
         using var memory = new MemoryStream();
         await stream.CopyToAsync(memory, ct);
         try
         {
-            var document = await setup.AddDocumentAsync(ctx.GetOrganizationId(), ctx.GetUserId(), documentType, file.FileName, file.ContentType, memory.ToArray(), ct);
+            var document = await setup.AddDocumentAsync(ctx.GetOrganizationId(), ctx.GetUserId(), documentType, Path.GetFileName(file.FileName), contentType, memory.ToArray(), ct);
             return Results.Ok(document);
         }
         catch (ArgumentException ex)

@@ -13,7 +13,9 @@ public sealed record ControlPlaneUser(
     string Status,
     string OrganizationName,
     // control.organization.status ('pending' until the worker provisions it); null for platform admins
-    string? OrganizationStatus = null);
+    string? OrganizationStatus = null,
+    DateTime? LockedUntil = null,
+    int FailedLoginAttempts = 0);
 
 public sealed record RegisteredIdentity(Guid UserId, Guid OrganizationId);
 public sealed record AgencyInvitation(Guid InvitationId, Guid OrganizationId, Guid UserId);
@@ -241,7 +243,13 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
 
     public async Task<bool> SetUserStatusAsync(Guid organizationId, Guid userId, string status, CancellationToken ct = default)
     {
-        await using var command = controlPlane.CreateCommand("UPDATE control.app_user SET status = @status, updated_at = now() WHERE id = @userId AND organization_id = @organizationId");
+        // Administrators are managed by TruvoID platform staff, not by each other; this
+        // stops an admin disabling/demoting a peer (or the org owner) and locking the org out.
+        await using var command = controlPlane.CreateCommand("""
+            UPDATE control.app_user SET status = @status, updated_at = now()
+            WHERE id = @userId AND organization_id = @organizationId
+              AND role NOT IN ('institution_admin', 'agency_admin', 'platform_admin')
+            """);
         command.Parameters.AddWithValue("status", status);
         command.Parameters.AddWithValue("userId", userId);
         command.Parameters.AddWithValue("organizationId", organizationId);
@@ -250,7 +258,11 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
 
     public async Task<bool> SetUserRoleAsync(Guid organizationId, Guid userId, string role, CancellationToken ct = default)
     {
-        await using var command = controlPlane.CreateCommand("UPDATE control.app_user SET role = @role, updated_at = now() WHERE id = @userId AND organization_id = @organizationId");
+        await using var command = controlPlane.CreateCommand("""
+            UPDATE control.app_user SET role = @role, updated_at = now()
+            WHERE id = @userId AND organization_id = @organizationId
+              AND role NOT IN ('institution_admin', 'agency_admin', 'platform_admin')
+            """);
         command.Parameters.AddWithValue("role", role);
         command.Parameters.AddWithValue("userId", userId);
         command.Parameters.AddWithValue("organizationId", organizationId);
@@ -324,10 +336,46 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
         return await command.ExecuteNonQueryAsync(ct) == 1;
     }
 
+    /// <summary>Consecutive failed sign-ins before an account is locked.</summary>
+    public const int MaxFailedLoginAttempts = 5;
+
+    /// <summary>How long an account stays locked after too many failed sign-ins.</summary>
+    public static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
     public async Task MarkLoginAsync(Guid userId, CancellationToken ct = default)
     {
         await using var command = controlPlane.CreateCommand(
             "UPDATE control.app_user SET last_login_at = now() WHERE id = @id");
+        command.Parameters.AddWithValue("id", userId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Counts a failed sign-in and locks the account once the threshold is reached.</summary>
+    public async Task RecordLoginFailureAsync(Guid userId, CancellationToken ct = default)
+    {
+        await using var command = controlPlane.CreateCommand("""
+            UPDATE control.app_user
+            SET failed_login_attempts = failed_login_attempts + 1,
+                locked_until = CASE
+                    WHEN failed_login_attempts + 1 >= @max THEN now() + @lockout
+                    ELSE locked_until END,
+                updated_at = now()
+            WHERE id = @id
+            """);
+        command.Parameters.AddWithValue("id", userId);
+        command.Parameters.AddWithValue("max", MaxFailedLoginAttempts);
+        command.Parameters.AddWithValue("lockout", LockoutDuration);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Clears the failure counter and records a successful sign-in.</summary>
+    public async Task RecordLoginSuccessAsync(Guid userId, CancellationToken ct = default)
+    {
+        await using var command = controlPlane.CreateCommand("""
+            UPDATE control.app_user
+            SET failed_login_attempts = 0, locked_until = NULL, last_login_at = now(), updated_at = now()
+            WHERE id = @id
+            """);
         command.Parameters.AddWithValue("id", userId);
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -366,7 +414,8 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
     {
         await using var command = controlPlane.CreateCommand($"""
             SELECT u.id, u.organization_id, u.outlet_id, u.email, u.full_name,
-                   u.credential_hash, u.role, u.status, coalesce(o.name, ''), o.status
+                   u.credential_hash, u.role, u.status, coalesce(o.name, ''), o.status,
+                   u.locked_until, u.failed_login_attempts
             FROM control.app_user u
             LEFT JOIN control.organization o ON o.id = u.organization_id
             {predicate}
@@ -387,6 +436,8 @@ public sealed class ControlPlaneIdentityStore(NpgsqlDataSource controlPlane)
             reader.GetString(6),
             reader.GetString(7),
             reader.GetString(8),
-            reader.IsDBNull(9) ? null : reader.GetString(9));
+            reader.IsDBNull(9) ? null : reader.GetString(9),
+            reader.IsDBNull(10) ? null : reader.GetFieldValue<DateTime>(10),
+            reader.GetInt32(11));
     }
 }

@@ -1,12 +1,11 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
+using TruvoID.API.Auth;
 using TruvoID.Core.Interfaces;
 using TruvoID.Domain.Enums;
 using TruvoID.Infrastructure.Postgres;
@@ -22,13 +21,13 @@ public static class AuthEndpoints
         authGroup.MapPost("/register", Register)
             .AllowAnonymous().RequireRateLimiting("auth");
 
-        authGroup.MapPost("/login", (LoginRequest request, ControlPlaneIdentityStore identities, RefreshTokenStore refreshTokens, IAuditService audit) =>
-                Login(request, identities, refreshTokens, audit, platformAdmin: false))
+        authGroup.MapPost("/login", (LoginRequest request, ControlPlaneIdentityStore identities, RefreshTokenStore refreshTokens, IAuditService audit, JwtSettings jwt) =>
+                Login(request, identities, refreshTokens, audit, jwt, platformAdmin: false))
             .AllowAnonymous().RequireRateLimiting("auth");
 
         // Platform staff sign in separately (dashboard route /admin/login); workspace users can't use it.
-        app.MapPost("/v1/admin/auth/login", (LoginRequest request, ControlPlaneIdentityStore identities, RefreshTokenStore refreshTokens, IAuditService audit) =>
-                Login(request, identities, refreshTokens, audit, platformAdmin: true))
+        app.MapPost("/v1/admin/auth/login", (LoginRequest request, ControlPlaneIdentityStore identities, RefreshTokenStore refreshTokens, IAuditService audit, JwtSettings jwt) =>
+                Login(request, identities, refreshTokens, audit, jwt, platformAdmin: true))
             .AllowAnonymous().RequireRateLimiting("auth");
 
         authGroup.MapPost("/refresh", RefreshToken)
@@ -60,7 +59,8 @@ public static class AuthEndpoints
         HttpContext ctx,
         ChangePasswordRequest request,
         ControlPlaneIdentityStore identities,
-        RefreshTokenStore refreshTokens)
+        RefreshTokenStore refreshTokens,
+        JwtSettings jwt)
     {
         var userId = ctx.GetUserId();
         if (userId == Guid.Empty) return Results.Unauthorized();
@@ -78,7 +78,7 @@ public static class AuthEndpoints
 
         // Sign out every other device; this one gets a fresh session.
         await refreshTokens.RevokeAllForUserAsync(userId);
-        var (accessToken, expiresAt) = GenerateAccessToken(
+        var (accessToken, expiresAt) = GenerateAccessToken(jwt,
             user.OrganizationId ?? Guid.Empty, user.Id, ToLegacyClaimRole(user.Role), user.OutletId, user.Role);
         return Results.Ok(new
         {
@@ -120,7 +120,8 @@ public static class AuthEndpoints
     private static async Task<IResult> Register(
         RegisterRequest request,
         ControlPlaneIdentityStore identities,
-        RefreshTokenStore refreshTokens)
+        RefreshTokenStore refreshTokens,
+        JwtSettings jwt)
     {
         if (AuthValidation.ValidateRegistration(request.InstitutionName, request.AdminFullName, request.AdminEmail, request.Password) is { } validationError)
             return Results.BadRequest(new { error = validationError });
@@ -139,7 +140,7 @@ public static class AuthEndpoints
                 request.AdminEmail,
                 request.Password);
 
-            var (accessToken, expiresAt) = GenerateAccessToken(
+            var (accessToken, expiresAt) = GenerateAccessToken(jwt,
                 registered.OrganizationId,
                 registered.UserId,
                 "Admin",
@@ -167,6 +168,7 @@ public static class AuthEndpoints
         ControlPlaneIdentityStore identities,
         RefreshTokenStore refreshTokens,
         IAuditService audit,
+        JwtSettings jwt,
         bool platformAdmin)
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrEmpty(request.Password))
@@ -174,9 +176,24 @@ public static class AuthEndpoints
 
         var user = await identities.FindByEmailAsync(request.Email);
 
-        // Same message for unknown email and wrong password, so login can't be used to probe accounts.
-        if (user is null || !PasswordHasher.Verify(request.Password, user.CredentialHash))
+        // Always run the password hash — even for an unknown email — so the response
+        // time doesn't reveal whether an account exists. Same message either way.
+        var passwordOk = PasswordHasher.Verify(request.Password, user?.CredentialHash ?? DummyPasswordHash);
+        if (user is null || !passwordOk)
+        {
+            if (user is not null)
+                await identities.RecordLoginFailureAsync(user.Id);
             return Results.Json(new { error = "Incorrect email or password." }, statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        // Locked accounts are refused only after the password is confirmed, so the lock
+        // state isn't disclosed to someone who doesn't already know the password.
+        if (user.LockedUntil is { } lockedUntil && lockedUntil > DateTime.UtcNow)
+            return Results.Json(new
+            {
+                error = "Too many failed attempts. This account is temporarily locked — try again in a few minutes or reset your password.",
+                code = "account_locked",
+            }, statusCode: StatusCodes.Status429TooManyRequests);
 
         // Each sign-in serves exactly one kind of account, and a mismatch answers exactly like a
         // wrong password: neither page confirms an account exists or points to the other page.
@@ -193,10 +210,10 @@ public static class AuthEndpoints
             return Results.Json(new { error = "Your organization's access has been suspended. Contact TruvoID support." },
                 statusCode: StatusCodes.Status403Forbidden);
 
-        await identities.MarkLoginAsync(user.Id);
+        await identities.RecordLoginSuccessAsync(user.Id);
         await audit.LogAsync(AuditAction.Login, "User", user.Id, user.Id, "User");
 
-        var (accessToken, expiresAt) = GenerateAccessToken(
+        var (accessToken, expiresAt) = GenerateAccessToken(jwt,
             user.OrganizationId ?? Guid.Empty,
             user.Id,
             ToLegacyClaimRole(user.Role),
@@ -215,6 +232,7 @@ public static class AuthEndpoints
         RefreshTokenRequest request,
         ControlPlaneIdentityStore identities,
         RefreshTokenStore refreshTokens,
+        JwtSettings jwt,
         ILoggerFactory loggerFactory)
     {
         var rotation = await refreshTokens.RotateAsync(request.RefreshToken);
@@ -234,7 +252,7 @@ public static class AuthEndpoints
         }
 
         // Role and organization are re-read on every refresh, so changes apply within one access-token lifetime.
-        var (accessToken, expiresAt) = GenerateAccessToken(
+        var (accessToken, expiresAt) = GenerateAccessToken(jwt,
             user.OrganizationId ?? Guid.Empty, user.Id, ToLegacyClaimRole(user.Role), user.OutletId, user.Role);
 
         return Results.Ok(new LoginResponse
@@ -248,7 +266,8 @@ public static class AuthEndpoints
     private static async Task<IResult> GetCurrentUser(
         HttpContext ctx,
         ControlPlaneIdentityStore identities,
-        OrganizationSetupStore setup)
+        OrganizationSetupStore setup,
+        JwtSettings jwt)
     {
         // Extract claims from the JWT in the Authorization header
         var authHeader = ctx.Request.Headers.Authorization.ToString();
@@ -256,7 +275,7 @@ public static class AuthEndpoints
             return Results.Unauthorized();
 
         var token = authHeader["Bearer ".Length..].Trim();
-        var (userId, institutionId, _) = GetClaimsFromToken(token);
+        var (userId, institutionId, _) = GetClaimsFromToken(jwt, token);
 
         if (userId == Guid.Empty)
             return Results.Unauthorized();
@@ -291,11 +310,9 @@ public static class AuthEndpoints
 
     // ── helpers ────────────────────────────────────────────────────────────────
 
-    internal static string HashPassword(string password)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(password));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
-    }
+    // A real PBKDF2 hash, verified against unknown emails so login timing is the same
+    // whether or not the account exists (prevents user enumeration by response time).
+    private static readonly string DummyPasswordHash = PasswordHasher.Hash("timing-equalization-only");
 
     private static string ToLegacyClaimRole(string role) => role switch
     {
@@ -305,20 +322,8 @@ public static class AuthEndpoints
         _ => role
     };
 
-    // Railway sets Jwt__SecretKey / Jwt__Issuer / Jwt__Audience / Jwt__ExpiryMinutes
-    // (JWT_SECRET is kept as a fallback name). Must match what Program.cs reads for
-    // token validation, or tokens issued here never validate.
-    private static string JwtSecret =>
-        Environment.GetEnvironmentVariable("Jwt__SecretKey")
-        ?? Environment.GetEnvironmentVariable("JWT_SECRET")
-        ?? "dev-secret-key-change-in-production-32chars!!!";
-
-    private static string JwtIssuer => Environment.GetEnvironmentVariable("Jwt__Issuer") ?? "TruvoID";
-    private static string JwtAudience => Environment.GetEnvironmentVariable("Jwt__Audience") ?? "TruvoID";
-    private static int JwtExpiryMinutes =>
-        int.TryParse(Environment.GetEnvironmentVariable("Jwt__ExpiryMinutes"), out var m) ? m : 60;
-
     private static (string access, DateTime expires) GenerateAccessToken(
+        JwtSettings jwt,
         Guid organizationId,
         Guid userId,
         string role,
@@ -326,10 +331,9 @@ public static class AuthEndpoints
         string? tenantRole = null)
     {
         var now = DateTime.UtcNow;
-        var expiresAt = now.AddMinutes(JwtExpiryMinutes);
+        var expiresAt = now.AddMinutes(jwt.ExpiryMinutes);
 
-        var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(JwtSecret));
-        var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+        var credentials = new SigningCredentials(jwt.SigningKey, SecurityAlgorithms.HmacSha256);
 
         var claims = new[]
         {
@@ -349,8 +353,8 @@ public static class AuthEndpoints
             claims = claims.Append(new Claim(ClaimTypes.Role, tenantRole)).ToArray();
 
         var token = new JwtSecurityToken(
-            issuer: JwtIssuer,
-            audience: JwtAudience,
+            issuer: jwt.Issuer,
+            audience: jwt.Audience,
             claims: claims,
             expires: expiresAt,
             signingCredentials: credentials
@@ -359,24 +363,12 @@ public static class AuthEndpoints
         return (new JwtSecurityTokenHandler().WriteToken(token), expiresAt);
     }
 
-    private static (Guid userId, Guid institutionId, string role) GetClaimsFromToken(string token)
+    private static (Guid userId, Guid institutionId, string role) GetClaimsFromToken(JwtSettings jwt, string token)
     {
         try
         {
             var tokenHandler = new JwtSecurityTokenHandler();
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(JwtSecret));
-            var validationParameters = new TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = key,
-                ValidateIssuer = true,
-                ValidIssuer = JwtIssuer,
-                ValidateAudience = true,
-                ValidAudience = JwtAudience,
-                ClockSkew = TimeSpan.Zero
-            };
-
-            _ = tokenHandler.ValidateToken(token, validationParameters, out var validatedToken);
+            _ = tokenHandler.ValidateToken(token, jwt.ValidationParameters, out var validatedToken);
             var jwtToken = (JwtSecurityToken)validatedToken;
 
             // Read from the raw token claims, not the ClaimsPrincipal — JwtSecurityTokenHandler
@@ -434,7 +426,7 @@ public static class AuthEndpoints
     }
 }
 
-// ── shared DTOs (mirrored from Components/Services/FrontendModels.cs) ─────────
+// ── shared DTOs (mirrored by the React client's AuthProfile type) ────────────
 
 public record RegisterResponse
 {
