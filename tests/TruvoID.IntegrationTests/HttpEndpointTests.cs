@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -136,6 +137,67 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.OK, second.StatusCode);
         var secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("already_credited", secondBody.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Outlet_users_read_scoped_history_and_admins_manage_outlets()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var adminEmail = $"agency-{Guid.NewGuid():N}@gettruvoid.com";
+        var agency = await identities.RegisterOrganizationAsync(
+            $"Agency {Guid.NewGuid():N}", OrganizationType.Agency, "Agency Admin", adminEmail, "CorrectPass123");
+
+        var protector = TenantCredentialProtector.FromBase64("k1", ApiFactory.TenantCredentialKey);
+        await new TenantProvisioner(factory.MigratorConnectionString, protector, NullLogger.Instance).ProvisionPendingAsync();
+
+        var tenants = new TenantConnectionFactory(control, factory.AppConnectionString, protector);
+        Guid outletId;
+        await using (var session = await tenants.BeginAsync(TenantScope.Organization(agency.OrganizationId), CancellationToken.None))
+        {
+            outletId = await TenantOutlets.CreateAsync(session, "Lagos branch", null);
+            await session.CommitAsync(CancellationToken.None);
+        }
+
+        // An outlet_staff user pinned to that outlet (the CHECK constraint requires both ids).
+        var outletEmail = $"outlet-{Guid.NewGuid():N}@gettruvoid.com";
+        await using (var insert = control.CreateCommand("""
+            INSERT INTO control.app_user (id, email, full_name, credential_hash, organization_id, outlet_id, role, status)
+            VALUES (@id, @email, 'Outlet Staff', @hash, @org, @outlet, 'outlet_staff', 'active')
+            """))
+        {
+            insert.Parameters.AddWithValue("id", Guid.NewGuid());
+            insert.Parameters.AddWithValue("email", outletEmail);
+            insert.Parameters.AddWithValue("hash", PasswordHasher.Hash("CorrectPass123"));
+            insert.Parameters.AddWithValue("org", agency.OrganizationId);
+            insert.Parameters.AddWithValue("outlet", outletId);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        var client = factory.CreateClient();
+
+        // An outlet user may read verification history (previously 403) and is RLS-scoped.
+        var outletLogin = await client.PostAsJsonAsync("/v1/auth/login", new { email = outletEmail, password = "CorrectPass123" });
+        Assert.Equal(HttpStatusCode.OK, outletLogin.StatusCode);
+        var outletToken = (await outletLogin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        var outletClient = factory.CreateClient();
+        outletClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", outletToken);
+        Assert.Equal(HttpStatusCode.OK, (await outletClient.GetAsync("/v1/tenant/verification-calls")).StatusCode);
+
+        // An agency admin can read outlet detail and suspend/reactivate it.
+        var adminLogin = await client.PostAsJsonAsync("/v1/auth/login", new { email = adminEmail, password = "CorrectPass123" });
+        Assert.Equal(HttpStatusCode.OK, adminLogin.StatusCode);
+        var adminToken = (await adminLogin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        var adminClient = factory.CreateClient();
+        adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        var detail = await adminClient.GetAsync($"/v1/tenant/outlets/{outletId}");
+        Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+        Assert.Equal("active", (await detail.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString());
+
+        Assert.Equal(HttpStatusCode.OK, (await adminClient.PostAsync($"/v1/tenant/outlets/{outletId}/suspend", new StringContent(""))).StatusCode);
+        var after = await adminClient.GetAsync($"/v1/tenant/outlets/{outletId}");
+        Assert.Equal("suspended", (await after.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString());
     }
 
     private static HttpRequestMessage SignedWebhook(string body)

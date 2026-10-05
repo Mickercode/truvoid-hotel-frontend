@@ -80,6 +80,15 @@ Tests: `tests/TruvoID.Tests` (unit/DB, links backend source),
 against a real Postgres — auth policies, webhook signature + idempotent crediting,
 login lockout), and Vitest specs under `web/src/*.test.ts`.
 
+## Outlets
+
+Agency outlets have their own scoped experience:
+
+- Outlet users (`outlet_owner`/`outlet_staff`) see only Overview, Verify, History,
+  and Wallet; RLS scopes every query to their outlet (`outlet_id` claim).
+- Agency admins manage outlets from `/outlets` and open `/outlets/{id}` for an
+  outlet's wallet, its verification activity (`?outletId=`), and suspend/reactivate.
+
 ## Known remaining work
 
 - The admin UI is React (`/admin/agencies`, `/admin/pricing`, `/admin/api-keys`).

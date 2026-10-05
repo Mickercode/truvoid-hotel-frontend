@@ -9,8 +9,10 @@ public static class TenantVerificationHistoryEndpoints
 {
     public static IEndpointRouteBuilder MapTenantVerificationHistoryEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/v1/tenant/verification-calls", List)
-            .RequireAuthorization("TenantManager");
+        // Any signed-in workspace member: an outlet user is scoped by RLS to their own
+        // outlet, organization members see the whole organization (optionally filtered
+        // to one outlet for the agency-admin outlet view).
+        app.MapGet("/v1/tenant/verification-calls", List).RequireAuthorization();
         return app;
     }
 
@@ -21,18 +23,21 @@ public static class TenantVerificationHistoryEndpoints
         int pageSize = 25,
         string? status = null,
         string? type = null,
+        Guid? outletId = null,
         CancellationToken ct = default)
     {
+        if (ctx.GetOrganizationId() == Guid.Empty) return Results.Unauthorized();
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
-        await using var session = await tenants.BeginAsync(TenantScope.Organization(ctx.GetOrganizationId()), ct);
+        await using var session = await tenants.BeginAsync(ctx.GetTenantScope(), ct);
         var filters = new List<string>();
         if (!string.IsNullOrWhiteSpace(status)) filters.Add("status = @status");
         if (!string.IsNullOrWhiteSpace(type)) filters.Add("verification_type = @type");
+        if (outletId is not null) filters.Add("outlet_id = @outletId");
         var where = filters.Count == 0 ? "" : $"WHERE {string.Join(" AND ", filters)}";
         await using var command = session.CreateCommand($"""
             SELECT id, verification_type, status, subject_ref, ledger_entry_id, created_at, completed_at,
-                   result->>'verdict', result->'identity'->>'fullName', result->>'environment'
+                   result->>'verdict', result->'identity'->>'fullName', result->>'environment', outlet_id
             FROM verification_call
             {where}
             ORDER BY created_at DESC
@@ -40,16 +45,18 @@ public static class TenantVerificationHistoryEndpoints
             """);
         if (!string.IsNullOrWhiteSpace(status)) command.Parameters.AddWithValue("status", status.Trim().ToLowerInvariant());
         if (!string.IsNullOrWhiteSpace(type)) command.Parameters.AddWithValue("type", type.Trim().ToLowerInvariant());
+        if (outletId is { } filterOutlet) command.Parameters.AddWithValue("outletId", filterOutlet);
         command.Parameters.AddWithValue("pageSize", pageSize);
         command.Parameters.AddWithValue("offset", (page - 1) * pageSize);
         await using var reader = await command.ExecuteReaderAsync(ct);
         var calls = new List<VerificationHistoryItem>();
         while (await reader.ReadAsync(ct))
             calls.Add(new VerificationHistoryItem(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)[..Math.Min(12, reader.GetString(3).Length)], reader.GetGuid(4), reader.GetFieldValue<DateTime>(5), reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTime>(6),
-                reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetString(9)));
+                reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.IsDBNull(10) ? null : reader.GetGuid(10)));
         return Results.Ok(new { page, pageSize, items = calls });
     }
 
     private sealed record VerificationHistoryItem(Guid Id, string VerificationType, string Status, string SubjectPreview, Guid LedgerEntryId, DateTime CreatedAt, DateTime? CompletedAt,
-        string? Verdict, string? FullName, string? Environment);
+        string? Verdict, string? FullName, string? Environment, Guid? OutletId);
 }
