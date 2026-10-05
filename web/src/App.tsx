@@ -20,6 +20,7 @@ import { VerificationHistoryPage } from "./VerificationHistoryPage";
 import { TeamPage } from "./TeamPage";
 import { AcceptInvite, AdminLogin, ForgotPassword, Login, Register, ResetPassword } from "./AuthScreens";
 import { PricingPage } from "./PricingPage";
+import { ApiKeysAdminPage } from "./ApiKeysAdminPage";
 import { AdminReview } from "./AdminReview";
 import { CopyButton } from "./CopyButton";
 import { useEnvironment } from "./useEnvironment";
@@ -139,6 +140,7 @@ function Shell({
     ? [
         ["/admin/agencies", "Organizations"],
         ["/admin/pricing", "Pricing"],
+        ["/admin/api-keys", "API keys"],
       ]
     : [
         ["/dashboard", "Overview"],
@@ -235,6 +237,7 @@ function Shell({
               <>
                 <Route path="/admin/agencies" element={<InviteAgency />} />
                 <Route path="/admin/pricing" element={<PricingPage />} />
+                <Route path="/admin/api-keys" element={<ApiKeysAdminPage />} />
                 <Route path="*" element={<Navigate to="/admin/agencies" replace />} />
               </>
             ) : (
@@ -407,13 +410,23 @@ function Outlets() {
     </section>
   );
 }
+const BANK_ACCOUNTS = [
+  { bank: "Zenith Bank", name: "Slogani Consults Nigeria Limited", number: "1017167544" },
+  { bank: "Providus Bank", name: "Slogani Consults Nigeria Limited", number: "1310418112" },
+];
+const SUPPORT_WHATSAPP = (import.meta.env.VITE_SUPPORT_WHATSAPP as string | undefined)?.trim();
 function Wallet() {
   const [balance, setBalance] = useState<Json>({});
   const [ledger, setLedger] = useState<Json[]>([]);
+  const [params, setParams] = useSearchParams();
   const environment = useEnvironment();
   const [funding, setFunding] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const [amount, setAmount] = useState(100000);
   const [fundMessage, setFundMessage] = useState<{ text: string; error?: boolean } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   function load() {
+    setLoadError(null);
     Promise.all([
       api.get<Json>("/v1/tenant/wallet/balance"),
       api.get<Json[]>("/v1/tenant/wallet/ledger?page=1&pageSize=20"),
@@ -422,9 +435,48 @@ function Wallet() {
         setBalance(wallet);
         setLedger(entries);
       })
-      .catch(() => undefined);
+      .catch((error) =>
+        setLoadError(error instanceof Error ? error.message : "Wallet could not be loaded."),
+      );
   }
   useEffect(load, []);
+  // Flutterwave sends the payer back to /wallet?tx_ref=…&transaction_id=…&status=…
+  useEffect(() => {
+    const txRef = params.get("tx_ref") ?? params.get("txref");
+    const transactionId = params.get("transaction_id");
+    if (!txRef || !transactionId) return;
+    setFundMessage({ text: "Confirming your payment…" });
+    api
+      .post<{ status?: string }>("/v1/tenant/wallet/topups/flutterwave/verify", {
+        transactionReference: txRef,
+        providerTransactionId: transactionId,
+      })
+      .then((result) => {
+        setFundMessage({
+          text:
+            result?.status === "already_credited"
+              ? "This payment was already credited."
+              : "Payment confirmed — your wallet has been credited.",
+        });
+        load();
+      })
+      .catch((error) =>
+        setFundMessage({
+          text:
+            error instanceof Error
+              ? error.message
+              : "We could not confirm the payment. If you were debited, contact support.",
+          error: true,
+        }),
+      )
+      .finally(() => {
+        const next = new URLSearchParams(params);
+        ["tx_ref", "txref", "transaction_id", "status"].forEach((key) => next.delete(key));
+        setParams(next, { replace: true });
+      });
+    // Runs once for the redirect back from Flutterwave; params are read from the URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   async function addTestFunds() {
     setFunding(true);
     setFundMessage(null);
@@ -436,6 +488,25 @@ function Wallet() {
       setFundMessage({ text: error instanceof Error ? error.message : "Test funds could not be added.", error: true });
     } finally {
       setFunding(false);
+    }
+  }
+  async function startFlutterwave() {
+    if (amount < 50000) {
+      setFundMessage({ text: "The minimum wallet funding is ₦50,000.", error: true });
+      return;
+    }
+    setPaying(true);
+    setFundMessage(null);
+    try {
+      const checkout = await api.post<{ checkoutUrl: string }>(
+        "/v1/tenant/wallet/topups/flutterwave/initialize",
+        { amountNaira: amount, redirectUrl: `${window.location.origin}/wallet` },
+      );
+      if (!checkout?.checkoutUrl) throw new Error("Flutterwave did not return a checkout link.");
+      window.location.assign(checkout.checkoutUrl);
+    } catch (error) {
+      setFundMessage({ text: error instanceof Error ? error.message : "We could not start Flutterwave checkout.", error: true });
+      setPaying(false);
     }
   }
   return (
@@ -465,8 +536,85 @@ function Wallet() {
           </button>
         )}
       </div>
+      {environment !== "sandbox" && (
+        <div className="section-heading">
+          <div>
+            <div className="eyebrow">ADD FUNDS</div>
+            <h2>Top up your wallet</h2>
+          </div>
+        </div>
+      )}
+      {environment !== "sandbox" && (
+        <div style={{ maxWidth: 420, marginTop: 8 }}>
+          <label className="field">
+            <span>Amount (₦)</span>
+            <input type="number" min={50000} step={10000} value={amount}
+              onChange={(event) => setAmount(Number(event.target.value))} />
+          </label>
+          <span className="field-hint">Minimum funding is ₦50,000.</span>
+          <button className="button button-primary" style={{ marginTop: 12, width: "100%" }}
+            onClick={() => void startFlutterwave()} disabled={paying || amount < 50000}>
+            {paying ? <><span className="spinner" aria-hidden="true" />Starting checkout…</> : "Pay securely with Flutterwave ↗"}
+          </button>
+          <span className="field-hint" style={{ display: "block", marginTop: 10 }}>You'll be redirected to Flutterwave's secure checkout.</span>
+        </div>
+      )}
+      {environment !== "sandbox" && (
+        <>
+          <div className="section-heading">
+            <div>
+              <div className="eyebrow">BANK TRANSFER</div>
+              <h2>Or pay by transfer</h2>
+            </div>
+          </div>
+          <p className="lede">
+            Transfer the exact amount to either account, then send your receipt to support.
+            Your wallet is credited once the payment is confirmed — usually within one business day.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Bank</th>
+                  <th>Account name</th>
+                  <th>Account number</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {BANK_ACCOUNTS.map((account) => (
+                  <tr key={account.number}>
+                    <td>{account.bank}</td>
+                    <td>{account.name}</td>
+                    <td><code>{account.number}</code></td>
+                    <td><CopyButton value={account.number} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="field-hint" style={{ display: "block", marginTop: 10 }}>
+            {SUPPORT_WHATSAPP ? (
+              <>
+                Send your receipt to{" "}
+                <a className="text-link" href={`https://wa.me/${SUPPORT_WHATSAPP.replace(/[^0-9]/g, "")}`} target="_blank" rel="noreferrer">
+                  support on WhatsApp
+                </a>{" "}
+                so we can credit your wallet.
+              </>
+            ) : (
+              "Send your payment receipt to TruvoID support so we can credit your wallet."
+            )}
+          </p>
+        </>
+      )}
       {fundMessage && (
         <div className={`notice ${fundMessage.error ? "error" : "success"}`} role="status">{fundMessage.text}</div>
+      )}
+      {loadError && (
+        <div className="notice error" role="alert">
+          {loadError} <button className="retry-button" onClick={() => load()}>Retry</button>
+        </div>
       )}
       <div className="section-heading">
         <div>
@@ -534,12 +682,65 @@ function InviteAgency() {
   const [organizations, setOrganizations] = useState<Json[]>([]);
   const [refresh, setRefresh] = useState(0);
   const [reviewing, setReviewing] = useState<{ id: string; name: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [statusBusy, setStatusBusy] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [invitations, setInvitations] = useState<Json[]>([]);
+  const [invForm, setInvForm] = useState({ organizationType: "institution", organizationName: "", adminFullName: "", adminEmail: "" });
+  const [invSending, setInvSending] = useState(false);
+  const [invMessage, setInvMessage] = useState("");
+  const [invFailed, setInvFailed] = useState(false);
+  const [invLink, setInvLink] = useState("");
+  const [invBusy, setInvBusy] = useState<string | null>(null);
   useEffect(() => {
+    setLoadError(null);
     api
       .get<Json[]>("/v1/admin/organizations")
       .then(setOrganizations)
-      .catch(() => undefined);
+      .catch((error) =>
+        setLoadError(error instanceof Error ? error.message : "Organizations could not be loaded."),
+      );
+    api.get<Json[]>("/v1/admin/invitations").then(setInvitations).catch(() => undefined);
   }, [refresh]);
+
+  async function submitInvitation(event: FormEvent) {
+    event.preventDefault();
+    if (invSending) return;
+    setInvSending(true);
+    setInvMessage("");
+    setInvLink("");
+    try {
+      const result = await api.post<Json>("/v1/admin/invitations", invForm);
+      setInvFailed(false);
+      setInvLink(String(result.link ?? ""));
+      setInvMessage(String(result.message ?? "Invitation created."));
+      setInvForm({ ...invForm, organizationName: "", adminFullName: "", adminEmail: "" });
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setInvFailed(true);
+      setInvMessage(error instanceof Error ? error.message : "Could not create the invitation.");
+    } finally {
+      setInvSending(false);
+    }
+  }
+
+  async function invitationAction(id: string, action: "resend" | "cancel") {
+    if (invBusy) return;
+    setInvBusy(id);
+    setInvMessage("");
+    setInvFailed(false);
+    try {
+      const result = await api.post<Json>(`/v1/admin/invitations/${id}/${action}`, {});
+      if (action === "resend") setInvLink(String(result.link ?? ""));
+      setInvMessage(String(result.message ?? (action === "resend" ? "New link issued." : "Invitation cancelled.")));
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setInvFailed(true);
+      setInvMessage(error instanceof Error ? error.message : "The invitation action failed.");
+    } finally {
+      setInvBusy(null);
+    }
+  }
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (sending) return;
@@ -567,8 +768,17 @@ function InviteAgency() {
     }
   }
   async function changeStatus(id: string, action: string) {
-    await api.post(`/v1/admin/organizations/${id}/${action}`, {});
-    setRefresh((value) => value + 1);
+    if (statusBusy) return;
+    setStatusBusy(id);
+    setStatusError(null);
+    try {
+      await api.post(`/v1/admin/organizations/${id}/${action}`, {});
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setStatusError(error instanceof Error ? error.message : "The status change failed.");
+    } finally {
+      setStatusBusy(null);
+    }
   }
   return (
     <section>
@@ -623,7 +833,17 @@ function InviteAgency() {
           onDecided={() => setRefresh((value) => value + 1)}
         />
       )}
-      {organizations.length ? (
+      {statusError && (
+        <div className="notice error" role="alert">{statusError}</div>
+      )}
+      {loadError ? (
+        <div className="notice error" role="alert">
+          {loadError}{" "}
+          <button className="retry-button" onClick={() => setRefresh((value) => value + 1)}>
+            Retry
+          </button>
+        </div>
+      ) : organizations.length ? (
         <div className="table-wrap">
           <table>
             <thead>
@@ -664,20 +884,22 @@ function InviteAgency() {
                     {String(item.status) === "suspended" ? (
                       <button
                         className="link-button"
+                        disabled={statusBusy === String(item.id)}
                         onClick={() =>
                           void changeStatus(String(item.id), "reactivate")
                         }
                       >
-                        Reactivate
+                        {statusBusy === String(item.id) ? "Working…" : "Reactivate"}
                       </button>
                     ) : (
                       <button
                         className="link-button"
+                        disabled={statusBusy === String(item.id)}
                         onClick={() =>
                           void changeStatus(String(item.id), "suspend")
                         }
                       >
-                        Suspend
+                        {statusBusy === String(item.id) ? "Working…" : "Suspend"}
                       </button>
                     )}
                   </td>
@@ -688,6 +910,81 @@ function InviteAgency() {
         </div>
       ) : (
         <div className="empty">No organizations found.</div>
+      )}
+
+      <div className="section-heading">
+        <div>
+          <div className="eyebrow">PLATFORM / INVITATIONS</div>
+          <h2>Create an organization</h2>
+        </div>
+      </div>
+      <p className="lede">
+        The organization and its administrator are created only when the invitation is accepted.
+        Send an invitation to a new Institution or Agency and share the link if the email doesn't arrive.
+      </p>
+      <div className="form-card narrow">
+        <form onSubmit={submitInvitation} noValidate>
+          <label className="field"><span>Organization type</span>
+            <select value={invForm.organizationType}
+              onChange={(event) => setInvForm({ ...invForm, organizationType: event.target.value })}>
+              <option value="institution">Institution</option>
+              <option value="agency">Agency</option>
+            </select>
+          </label>
+          <Field label="Organization name" required value={invForm.organizationName}
+            onChange={(event) => setInvForm({ ...invForm, organizationName: event.target.value })} />
+          <Field label="Administrator name" required value={invForm.adminFullName}
+            onChange={(event) => setInvForm({ ...invForm, adminFullName: event.target.value })} />
+          <Field label="Administrator email" required type="email" value={invForm.adminEmail}
+            onChange={(event) => setInvForm({ ...invForm, adminEmail: event.target.value })} />
+          <Button disabled={invSending}>{invSending ? "Creating invitation…" : "Send invitation ↗"}</Button>
+        </form>
+        <Notice message={invMessage} error={invFailed} />
+        {invLink && (
+          <div className="key-reveal">
+            <span>Invitation link</span>
+            <code>{invLink}</code>
+            <CopyButton value={invLink} label="Copy invitation link" />
+          </div>
+        )}
+      </div>
+
+      {invitations.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Organization</th><th>Type</th><th>Administrator</th><th>Status</th><th>Expires</th><th /></tr>
+            </thead>
+            <tbody>
+              {invitations.map((item) => {
+                const status = String(item.status);
+                return (
+                  <tr key={String(item.id)}>
+                    <td>{String(item.organizationName)}</td>
+                    <td>{String(item.organizationType)}</td>
+                    <td>{String(item.adminEmail)}</td>
+                    <td><span className={`badge ${status === "accepted" ? "active" : status === "pending" ? "pending" : "failed"}`}>{status}</span></td>
+                    <td>{item.expiresAt ? new Date(String(item.expiresAt)).toLocaleDateString() : "—"}</td>
+                    <td>
+                      {status === "pending" && (
+                        <>
+                          <button className="link-button" disabled={invBusy === String(item.id)}
+                            onClick={() => void invitationAction(String(item.id), "resend")}>
+                            {invBusy === String(item.id) ? "Working…" : "Resend"}
+                          </button>{" "}
+                          <button className="link-button" disabled={invBusy === String(item.id)}
+                            onClick={() => void invitationAction(String(item.id), "cancel")}>
+                            Cancel
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );
@@ -745,6 +1042,7 @@ export function App() {
       <Route path="/register" element={<Register onLogin={setProfile} Frame={AuthFrame} />} />
       <Route path="/accept-agency-invite" element={<AcceptInvite kind="agency" Frame={AuthFrame} />} />
       <Route path="/accept-team-invite" element={<AcceptInvite kind="team" Frame={AuthFrame} />} />
+      <Route path="/accept-invite" element={<AcceptInvite kind="organization" Frame={AuthFrame} />} />
       <Route path="/admin/login" element={<AdminLogin onLogin={setProfile} Frame={AuthFrame} />} />
       <Route path="/forgot-password" element={<ForgotPassword Frame={AuthFrame} />} />
       <Route path="/reset-password" element={<ResetPassword Frame={AuthFrame} />} />

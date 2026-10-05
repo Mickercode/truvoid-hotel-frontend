@@ -246,7 +246,7 @@ export function Register({ onLogin, Frame }: { onLogin: (profile: AuthProfile) =
 
 // ── Accept an agency or team invitation ─────────────────────────────────────
 
-export function AcceptInvite({ kind, Frame }: { kind: 'agency' | 'team'; Frame: Frame }) {
+export function AcceptInvite({ kind, Frame }: { kind: 'agency' | 'team' | 'organization'; Frame: Frame }) {
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const token = params.get('token') ?? ''
@@ -255,7 +255,19 @@ export function AcceptInvite({ kind, Frame }: { kind: 'agency' | 'team'; Frame: 
   const [errors, setErrors] = useState<{ password?: string | null; confirm?: string | null }>({})
   const [message, setMessage] = useState('')
   const [phase, setPhase] = useState<'form' | 'progress' | 'done'>('form')
+  const [orgName, setOrgName] = useState('')
   const flow = useSteps(['Activating your account'])
+
+  // An Ops invitation only creates the organization when accepted, so the preview
+  // is what tells the person which organization they're being asked to set up.
+  useEffect(() => {
+    if (kind !== 'organization' || !token) return
+    let active = true
+    api.get<{ organizationName: string }>(`/v1/auth/invitations/${encodeURIComponent(token)}`)
+      .then((preview) => { if (active) setOrgName(preview.organizationName) })
+      .catch(() => { /* an invalid link is reported by the accept call */ })
+    return () => { active = false }
+  }, [kind, token])
 
   useEffect(() => {
     if (phase !== 'done') return
@@ -276,7 +288,8 @@ export function AcceptInvite({ kind, Frame }: { kind: 'agency' | 'team'; Frame: 
     flow.reset()
     setPhase('progress')
     try {
-      await flow.run(0, () => api.post(`/v1/auth/${kind}-invitations/accept`, { token, password }), 900)
+      const path = kind === 'organization' ? '/v1/auth/invitations/accept' : `/v1/auth/${kind}-invitations/accept`
+      await flow.run(0, () => api.post(path, { token, password }), 900)
       await pause(300)
       setPhase('done')
     } catch (error) {
@@ -288,17 +301,25 @@ export function AcceptInvite({ kind, Frame }: { kind: 'agency' | 'team'; Frame: 
 
   const title = kind === 'agency'
     ? <>Join your<br /><span className="gradient-text">agency workspace.</span></>
-    : <>Join your<br /><span className="gradient-text">workspace.</span></>
+    : kind === 'organization'
+      ? <>Set up your<br /><span className="gradient-text">organization.</span></>
+      : <>Join your<br /><span className="gradient-text">workspace.</span></>
+
+  const eyebrow = kind === 'agency' ? 'AGENCY INVITATION' : kind === 'organization' ? 'ORGANIZATION INVITATION' : 'TEAM INVITATION'
+  const roleNoun = kind === 'agency' ? 'agency administrator' : kind === 'organization' ? 'organization administrator' : 'team'
+  const description = kind === 'organization' && orgName
+    ? `Set a password to create ${orgName} and activate its administrator account.`
+    : `Set a password to activate your ${roleNoun} account.`
 
   return (
-    <Frame eyebrow={kind === 'agency' ? 'AGENCY INVITATION' : 'TEAM INVITATION'} title={title}>
+    <Frame eyebrow={eyebrow} title={title}>
       {!token ? (
         <div className="notice error" role="alert">
           This invitation link is incomplete. Open the link from your invitation email again, or ask for a new invitation.
         </div>
       ) : phase === 'form' ? (
         <>
-          <p className="lede">Set a password to activate your {kind === 'agency' ? 'agency administrator' : 'team'} account.</p>
+          <p className="lede">{description}</p>
           <form onSubmit={submit} noValidate>
             <PasswordField label="Password" autoComplete="new-password" autoFocus showStrength value={password}
               error={errors.password} hint="At least 8 characters, with a letter and a number."
