@@ -21,6 +21,7 @@ import { TeamPage } from "./TeamPage";
 import { AcceptInvite, AdminLogin, ForgotPassword, Login, Register, ResetPassword } from "./AuthScreens";
 import { PricingPage } from "./PricingPage";
 import { ApiKeysAdminPage } from "./ApiKeysAdminPage";
+import { OutletDetailPage } from "./OutletDetailPage";
 import { AdminReview } from "./AdminReview";
 import { CopyButton } from "./CopyButton";
 import { useEnvironment } from "./useEnvironment";
@@ -81,6 +82,16 @@ function PageTitle({
     </div>
   );
 }
+function Brand({ to, size = 28 }: { to: string; size?: number }) {
+  return (
+    <Link className="brand" to={to}>
+      <img className="brand-logo" src="/TruvoID-logo.png" alt="TruvoID" width={size} height={size} />
+      <span>
+        Truvo<span className="accent">ID</span>
+      </span>
+    </Link>
+  );
+}
 function AuthFrame({
   children,
   title,
@@ -93,12 +104,7 @@ function AuthFrame({
   return (
     <div className="auth-page">
       <div className="auth-panel">
-        <Link className="brand" to="/">
-          <span className="brand-mark">T</span>
-          <span>
-            Truvo<span className="accent">ID</span>
-          </span>
-        </Link>
+        <Brand to="/" />
         <div className="auth-copy">
           <div className="eyebrow">{eyebrow}</div>
           <h1>{title}</h1>
@@ -132,26 +138,36 @@ function Shell({
 }) {
   const location = useLocation();
   const isAdmin = profile.tenantRole === "platform_admin" || profile.role.toLowerCase().includes("platform");
+  const isOutlet = Boolean(profile.outletId);
   const environment = useEnvironment();
   const liveEnabled = Boolean(profile.liveEnabled);
   const [mode, changeMode] = useMode(liveEnabled);
-  // Platform staff run TruvoID; they don't have a workspace of their own.
+  // Platform staff run TruvoID; they don't have a workspace of their own. Outlet users
+  // get only the outlet-scoped surfaces — setup, team, outlets, and org API keys are
+  // organization-administrator tools the API would reject anyway.
   const items = isAdmin
     ? [
         ["/admin/agencies", "Organizations"],
         ["/admin/pricing", "Pricing"],
         ["/admin/api-keys", "API keys"],
       ]
-    : [
-        ["/dashboard", "Overview"],
-        ["/setup", "Organization setup"],
-        ["/verify", "Verify identity"],
-        ["/history", "History"],
-        ["/team", "Team"],
-        ["/outlets", "Outlets"],
-        ["/api-keys", "API keys"],
-        ["/wallet", "Wallet"],
-      ];
+    : isOutlet
+      ? [
+          ["/dashboard", "Overview"],
+          ["/verify", "Verify identity"],
+          ["/history", "History"],
+          ["/wallet", "Wallet"],
+        ]
+      : [
+          ["/dashboard", "Overview"],
+          ["/setup", "Organization setup"],
+          ["/verify", "Verify identity"],
+          ["/history", "History"],
+          ["/team", "Team"],
+          ["/outlets", "Outlets"],
+          ["/api-keys", "API keys"],
+          ["/wallet", "Wallet"],
+        ];
   const goLiveHint =
     profile.setupStatus === "submitted"
       ? "Your profile is under review — live unlocks once TruvoID approves it."
@@ -161,12 +177,7 @@ function Shell({
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <Link className="brand" to={isAdmin ? "/admin/agencies" : "/dashboard"}>
-          <span className="brand-mark">T</span>
-          <span>
-            Truvo<span className="accent">ID</span>
-          </span>
-        </Link>
+        <Brand to={isAdmin ? "/admin/agencies" : "/dashboard"} />
         <div className="workspace-label">{isAdmin ? "OPERATIONS" : "WORKSPACE"}</div>
         <div className="workspace">
           <span className="workspace-dot" />
@@ -196,7 +207,8 @@ function Shell({
       <main className="main-content">
         <header className="topbar">
           <div className="mobile-brand">
-            Truvo<span className="accent">ID</span>
+            <img className="brand-logo" src="/TruvoID-logo.png" alt="TruvoID" width={24} height={24} />
+            <span>Truvo<span className="accent">ID</span></span>
           </div>
           <div className="topbar-actions">
             {!isAdmin && environment !== "sandbox" && (
@@ -240,6 +252,14 @@ function Shell({
                 <Route path="/admin/api-keys" element={<ApiKeysAdminPage />} />
                 <Route path="*" element={<Navigate to="/admin/agencies" replace />} />
               </>
+            ) : isOutlet ? (
+              <>
+                <Route path="/dashboard" element={<Dashboard profile={profile} />} />
+                <Route path="/verify" element={<VerifyPage mode={mode} />} />
+                <Route path="/history" element={<VerificationHistoryPage />} />
+                <Route path="/wallet" element={<Wallet />} />
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </>
             ) : (
               <>
                 <Route path="/dashboard" element={<Dashboard profile={profile} />} />
@@ -248,6 +268,7 @@ function Shell({
                 <Route path="/history" element={<VerificationHistoryPage />} />
                 <Route path="/team" element={<TeamPage profile={profile} />} />
                 <Route path="/outlets" element={<Outlets />} />
+                <Route path="/outlets/:outletId" element={<OutletDetailPage />} />
                 <Route path="/api-keys" element={<ApiKeysPage profile={profile} />} />
                 <Route path="/wallet" element={<Wallet />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
@@ -396,9 +417,13 @@ function Outlets() {
             <tbody>
               {items.map((item) => (
                 <tr key={String(item.id)}>
-                  <td>{String(item.name)}</td>
-                  <td>{String(item.status)}</td>
-                  <td>{String(item.walletId)}</td>
+                  <td>
+                    <Link className="text-link" to={`/outlets/${String(item.id)}`}>
+                      {String(item.name)}
+                    </Link>
+                  </td>
+                  <td><span className={`badge ${String(item.status)}`}>{String(item.status)}</span></td>
+                  <td><code>{String(item.walletId).slice(0, 8)}</code></td>
                 </tr>
               ))}
             </tbody>
@@ -1018,7 +1043,7 @@ export function App() {
   if (loading)
     return (
       <div className="loading-screen">
-        <span className="brand-mark">T</span>
+        <img className="brand-logo" src="/TruvoID-logo.png" alt="TruvoID" width={44} height={44} />
         <span className="pulse" />
       </div>
     );
