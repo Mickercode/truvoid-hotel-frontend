@@ -31,7 +31,7 @@ function validateNumber(type: VerifyType, raw: string): string | null {
   return /^\d{11}$/.test(value) ? null : `A ${LABELS[type]} must be exactly 11 digits.`
 }
 
-export function VerifyPage({ mode }: { mode: Mode }) {
+export function VerifyPage({ mode, onModeChange }: { mode: Mode; onModeChange: (mode: Mode) => void }) {
   const test = mode === 'test'
   const [type, setType] = useState<VerifyType>('nin')
   const [number, setNumber] = useState('')
@@ -78,6 +78,12 @@ export function VerifyPage({ mode }: { mode: Mode }) {
       <p className="lede">{test
         ? 'Test mode: checks are free and only the test numbers below return data. Switch to Live (once approved) for real lookups.'
         : 'Check a NIN, BVN or phone number against the national registry. Each completed check is charged to your wallet; provider errors are refunded automatically.'}</p>
+      <div className="segmented two" role="radiogroup" aria-label="Verification mode" style={{ maxWidth: 360, marginTop: 16 }}>
+        <button type="button" role="radio" aria-checked={mode === 'test'} className={mode === 'test' ? 'active' : ''}
+          onClick={() => onModeChange('test')}>Test · free</button>
+        <button type="button" role="radio" aria-checked={mode === 'live'} className={mode === 'live' ? 'active' : ''}
+          onClick={() => onModeChange('live')}>Live · billed</button>
+      </div>
     </div>
     <div className="verify-layout">
       <div className="form-card">

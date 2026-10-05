@@ -269,6 +269,8 @@ public static class AuthEndpoints
         OrganizationSetupStore setup,
         JwtSettings jwt)
     {
+        // Never let a proxy/CDN serve a stale profile (setup status / liveEnabled).
+        ctx.Response.Headers.CacheControl = "no-store";
         // Extract claims from the JWT in the Authorization header
         var authHeader = ctx.Request.Headers.Authorization.ToString();
         if (!authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))

@@ -273,7 +273,7 @@ function Shell({
             ) : isOutlet ? (
               <>
                 <Route path="/dashboard" element={<Dashboard profile={profile} />} />
-                <Route path="/verify" element={<VerifyPage mode={mode} />} />
+                <Route path="/verify" element={<VerifyPage mode={mode} onModeChange={changeMode} />} />
                 <Route path="/history" element={<VerificationHistoryPage />} />
                 <Route path="/wallet" element={<Wallet />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
@@ -282,7 +282,7 @@ function Shell({
               <>
                 <Route path="/dashboard" element={<Dashboard profile={profile} />} />
                 <Route path="/setup" element={<OrganizationSetupPage />} />
-                <Route path="/verify" element={<VerifyPage mode={mode} />} />
+                <Route path="/verify" element={<VerifyPage mode={mode} onModeChange={changeMode} />} />
                 <Route path="/history" element={<VerificationHistoryPage />} />
                 <Route path="/team" element={<TeamPage profile={profile} />} />
                 <Route path="/outlets" element={<Outlets />} />
