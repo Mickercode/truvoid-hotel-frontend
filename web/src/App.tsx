@@ -290,6 +290,7 @@ function Dashboard({ profile }: { profile: AuthProfile }) {
         .catch(() => undefined);
   }, [profile.outletId]);
   const progress = Number(setup?.progress ?? 0);
+  const setupStatus = String(setup?.status ?? profile.setupStatus ?? "");
   if (profile.outletId)
     return (
       <section>
@@ -322,23 +323,65 @@ function Dashboard({ profile }: { profile: AuthProfile }) {
           progressively, then configure operations when you are ready.
         </p>
       </PageTitle>
-      <div className="activity-card">
-        <div>
-          <div className="eyebrow">ORGANIZATION SETUP</div>
-          <h2>
-            {progress === 100
-              ? "Your organization profile is ready."
-              : `${progress}% of your profile is complete.`}
-          </h2>
-          <p>
-            Save information section by section. Outlets, API keys, and wallet
-            funding remain optional until operations begin.
-          </p>
+      {setupStatus === "submitted" && (
+        <div className="activity-card">
+          <div>
+            <div className="eyebrow">PROFILE REVIEW</div>
+            <h2>Your profile is under review.</h2>
+            <p>
+              Your organization profile has been submitted and is being reviewed by
+              TruvoID. Live verification unlocks once it's approved; free test mode
+              stays available until then.
+            </p>
+          </div>
+          <Link className="button button-primary" to="/setup">
+            View profile ↗
+          </Link>
         </div>
-        <Link className="button button-primary" to="/setup">
-          {progress === 100 ? "Review setup ↗" : "Continue setup ↗"}
-        </Link>
-      </div>
+      )}
+      {setupStatus === "needs_changes" && (
+        <div className="activity-card">
+          <div>
+            <div className="eyebrow">CHANGES REQUESTED</div>
+            <h2>TruvoID asked for changes.</h2>
+            <p>{String(setup?.reviewNote ?? "Update your profile and submit it again to continue.")}</p>
+          </div>
+          <Link className="button button-primary" to="/setup">
+            Update profile ↗
+          </Link>
+        </div>
+      )}
+      {setupStatus === "approved" && (
+        <div className="activity-card">
+          <div>
+            <div className="eyebrow">PROFILE APPROVED</div>
+            <h2>Live verification is enabled.</h2>
+            <p>Your organization is approved. Run real, billed verifications from the Verify page.</p>
+          </div>
+          <Link className="button button-primary" to="/verify">
+            Verify identity ↗
+          </Link>
+        </div>
+      )}
+      {setupStatus !== "submitted" && setupStatus !== "needs_changes" && setupStatus !== "approved" && (
+        <div className="activity-card">
+          <div>
+            <div className="eyebrow">ORGANIZATION SETUP</div>
+            <h2>
+              {progress === 100
+                ? "Your organization profile is ready."
+                : `${progress}% of your profile is complete.`}
+            </h2>
+            <p>
+              Save information section by section. Outlets, API keys, and wallet
+              funding remain optional until operations begin.
+            </p>
+          </div>
+          <Link className="button button-primary" to="/setup">
+            {progress === 100 ? "Review setup ↗" : "Continue setup ↗"}
+          </Link>
+        </div>
+      )}
       {profile.role.toLowerCase().includes("agency") && (
         <div className="activity-card">
           <div>
