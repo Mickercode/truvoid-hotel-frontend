@@ -209,6 +209,10 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         var organization = await identities.RegisterOrganizationAsync(
             $"Setup {Guid.NewGuid():N}", OrganizationType.Institution, "Setup Admin", email, "CorrectPass123");
 
+        // Live mode also depends on the organization being provisioned (active).
+        var protector = TenantCredentialProtector.FromBase64("k1", ApiFactory.TenantCredentialKey);
+        await new TenantProvisioner(factory.MigratorConnectionString, protector, NullLogger.Instance).ProvisionPendingAsync();
+
         var client = factory.CreateClient();
         var login = await client.PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" });
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
@@ -254,6 +258,13 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
 
         var approve = await adminClient.PostAsJsonAsync($"/v1/admin/organizations/{organization.OrganizationId}/setup/approve", new { note = (string?)null });
         Assert.Equal(HttpStatusCode.OK, approve.StatusCode);
+
+        // Approval flips the organization to live mode.
+        var me = await client.GetAsync("/v1/auth/me");
+        Assert.Equal(HttpStatusCode.OK, me.StatusCode);
+        var meBody = await me.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("approved", meBody.GetProperty("setupStatus").GetString());
+        Assert.True(meBody.GetProperty("liveEnabled").GetBoolean());
     }
 
     [Fact]

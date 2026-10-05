@@ -356,7 +356,11 @@ function Dashboard({ profile }: { profile: AuthProfile }) {
           <div>
             <div className="eyebrow">PROFILE APPROVED</div>
             <h2>Live verification is enabled.</h2>
-            <p>Your organization is approved. Run real, billed verifications from the Verify page.</p>
+            <p>
+              Your organization is approved. Switch to <strong>Live</strong> using the
+              Test/Live switch at the top, then run real, billed verifications — charges
+              come straight from your wallet balance.
+            </p>
           </div>
           <Link className="button button-primary" to="/verify">
             Verify identity ↗
@@ -1144,10 +1148,21 @@ export function App() {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expire);
   }, []);
   useEffect(() => {
-    // Setup status changes what the shell shows (test-mode banner, Live switch).
+    // Setup status changes what the shell shows (test-mode banner, Live switch), and
+    // approval happens on the platform side, so pick it up on focus/visibility and
+    // with a slow poll rather than only on a full page reload.
     const reload = () => void api.profile().then(setProfile).catch(() => undefined);
+    const onVisible = () => { if (document.visibilityState === "visible") reload(); };
     window.addEventListener(PROFILE_CHANGED_EVENT, reload);
-    return () => window.removeEventListener(PROFILE_CHANGED_EVENT, reload);
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = window.setInterval(reload, 60_000);
+    return () => {
+      window.removeEventListener(PROFILE_CHANGED_EVENT, reload);
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(timer);
+    };
   }, []);
   if (loading)
     return (
