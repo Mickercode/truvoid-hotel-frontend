@@ -293,6 +293,13 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         var body = await credit.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(500_000, body.GetProperty("balanceAfterKobo").GetInt64());
 
+        // The organizations list echoes the balance so the dashboard can show it.
+        var list = await adminClient.GetAsync("/v1/admin/organizations");
+        Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+        var row = (await list.Content.ReadFromJsonAsync<JsonElement>()).EnumerateArray()
+            .First(o => o.GetProperty("id").GetString() == organization.OrganizationId.ToString());
+        Assert.Equal(500_000, row.GetProperty("balanceKobo").GetInt64());
+
         var invalid = await adminClient.PostAsJsonAsync(
             $"/v1/admin/tenant-wallets/{organization.OrganizationId}/credit", new { amountKobo = 0 });
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);

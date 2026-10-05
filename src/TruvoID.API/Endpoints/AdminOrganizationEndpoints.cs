@@ -74,21 +74,58 @@ public static class AdminOrganizationEndpoints
 
     public sealed record ReviewRequest(string? Note);
 
-    private static async Task<IResult> List(NpgsqlDataSource db, CancellationToken ct)
+    private static async Task<IResult> List(
+        NpgsqlDataSource db,
+        TenantConnectionFactory tenants,
+        TenantWalletService wallets,
+        CancellationToken ct)
     {
-        await using var command = db.CreateCommand("""
+        var organizations = new List<OrganizationAdminItem>();
+        await using (var command = db.CreateCommand("""
             SELECT o.id, o.name, o.type, o.status, o.created_at,
                    coalesce(s.status, 'incomplete'),
                    (SELECT count(*) FROM control.app_user u WHERE u.organization_id = o.id)
             FROM control.organization o
             LEFT JOIN control.organization_setup s ON s.organization_id = o.id
             ORDER BY o.created_at DESC
-            """);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        var organizations = new List<OrganizationAdminItem>();
-        while (await reader.ReadAsync(ct))
-            organizations.Add(new OrganizationAdminItem(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTime>(4), reader.GetString(5), reader.GetInt64(6)));
-        return Results.Ok(organizations);
+            """))
+        {
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                organizations.Add(new OrganizationAdminItem(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTime>(4), reader.GetString(5), reader.GetInt64(6)));
+        }
+
+        // The wallet lives in each organization's own schema, so only provisioned
+        // ("active") organizations have a balance to read; the rest stay null.
+        var result = new List<object>(organizations.Count);
+        foreach (var organization in organizations)
+        {
+            long? balanceKobo = null;
+            if (organization.Status == "active")
+            {
+                try
+                {
+                    await using var session = await tenants.BeginAsync(TenantScope.Organization(organization.Id), ct);
+                    balanceKobo = (await wallets.GetBalanceAsync(session, ct)).BalanceKobo;
+                }
+                catch
+                {
+                    // Best-effort: a single unreadable tenant must not fail the whole list.
+                }
+            }
+            result.Add(new
+            {
+                organization.Id,
+                organization.Name,
+                organization.Type,
+                organization.Status,
+                organization.CreatedAt,
+                organization.SetupStatus,
+                organization.UserCount,
+                balanceKobo,
+            });
+        }
+        return Results.Ok(result);
     }
 
     private static async Task<IResult> SetStatus(Guid id, string status, NpgsqlDataSource db, CancellationToken ct)

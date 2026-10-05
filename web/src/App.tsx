@@ -928,6 +928,7 @@ function InviteAgency() {
                 <th>Status</th>
                 <th>Setup</th>
                 <th>Users</th>
+                <th>Balance</th>
                 <th />
               </tr>
             </thead>
@@ -955,6 +956,11 @@ function InviteAgency() {
                     )}
                   </td>
                   <td>{String(item.userCount)}</td>
+                  <td>
+                    {item.balanceKobo == null
+                      ? <span className="muted">—</span>
+                      : `₦${(Number(item.balanceKobo) / 100).toLocaleString("en-NG", { minimumFractionDigits: 2 })}`}
+                  </td>
                   <td>
                     <button
                       className="link-button"
