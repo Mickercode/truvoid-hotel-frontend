@@ -717,6 +717,10 @@ function InviteAgency() {
   const [invFailed, setInvFailed] = useState(false);
   const [invLink, setInvLink] = useState("");
   const [invBusy, setInvBusy] = useState<string | null>(null);
+  const [crediting, setCrediting] = useState<{ id: string; name: string } | null>(null);
+  const [creditForm, setCreditForm] = useState({ amount: "", reference: "" });
+  const [creditBusy, setCreditBusy] = useState(false);
+  const [creditMessage, setCreditMessage] = useState<{ text: string; error?: boolean } | null>(null);
   useEffect(() => {
     setLoadError(null);
     api
@@ -764,6 +768,34 @@ function InviteAgency() {
       setInvMessage(error instanceof Error ? error.message : "The invitation action failed.");
     } finally {
       setInvBusy(null);
+    }
+  }
+
+  async function addCredit(event: FormEvent) {
+    event.preventDefault();
+    if (!crediting || creditBusy) return;
+    const amountKobo = Math.round(Number(creditForm.amount) * 100);
+    if (!creditForm.amount || Number.isNaN(amountKobo) || amountKobo <= 0) {
+      setCreditMessage({ text: "Enter an amount greater than zero.", error: true });
+      return;
+    }
+    setCreditBusy(true);
+    setCreditMessage(null);
+    try {
+      const result = await api.post<Json>(`/v1/admin/tenant-wallets/${crediting.id}/credit`, {
+        amountKobo,
+        reference: creditForm.reference || null,
+      });
+      const naira = (kobo: number) => `₦${(kobo / 100).toLocaleString("en-NG", { minimumFractionDigits: 2 })}`;
+      setCreditMessage({
+        text: `Credited ${naira(amountKobo)} to ${crediting.name}. New balance: ${naira(Number(result.balanceAfterKobo ?? 0))}.`,
+      });
+      setCreditForm({ amount: "", reference: "" });
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setCreditMessage({ text: error instanceof Error ? error.message : "Could not add credit.", error: true });
+    } finally {
+      setCreditBusy(false);
     }
   }
   async function submit(event: FormEvent) {
@@ -858,6 +890,24 @@ function InviteAgency() {
           onDecided={() => setRefresh((value) => value + 1)}
         />
       )}
+      {crediting && (
+        <div className="form-card narrow">
+          <div className="eyebrow">ADD CREDIT — {crediting.name}</div>
+          <form onSubmit={addCredit} noValidate>
+            <label className="field"><span>Amount (₦)</span>
+              <input inputMode="decimal" value={creditForm.amount}
+                onChange={(event) => setCreditForm({ ...creditForm, amount: event.target.value })} placeholder="e.g. 50000" /></label>
+            <label className="field"><span>Reference (optional)</span>
+              <input value={creditForm.reference}
+                onChange={(event) => setCreditForm({ ...creditForm, reference: event.target.value })} placeholder="Bank transfer ref / note" /></label>
+            <div className="setup-actions">
+              <button className="button button-primary" disabled={creditBusy}>{creditBusy ? "Crediting…" : "Add credit ↗"}</button>
+              <button type="button" className="link-button" onClick={() => { setCrediting(null); setCreditMessage(null); }}>Cancel</button>
+            </div>
+          </form>
+          {creditMessage && <div className={`notice ${creditMessage.error ? "error" : "success"}`} role="status">{creditMessage.text}</div>}
+        </div>
+      )}
       {statusError && (
         <div className="notice error" role="alert">{statusError}</div>
       )}
@@ -906,6 +956,16 @@ function InviteAgency() {
                   </td>
                   <td>{String(item.userCount)}</td>
                   <td>
+                    <button
+                      className="link-button"
+                      onClick={() => {
+                        setCrediting({ id: String(item.id), name: String(item.name) });
+                        setCreditMessage(null);
+                        setCreditForm({ amount: "", reference: "" });
+                      }}
+                    >
+                      Add credit
+                    </button>{" "}
                     {String(item.status) === "suspended" ? (
                       <button
                         className="link-button"

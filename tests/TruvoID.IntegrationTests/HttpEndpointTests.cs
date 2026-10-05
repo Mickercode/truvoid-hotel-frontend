@@ -268,6 +268,36 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Platform_admin_can_credit_an_organization_wallet()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var organization = await identities.RegisterOrganizationAsync(
+            $"Credit {Guid.NewGuid():N}", OrganizationType.Institution, "Credit Admin",
+            $"credit-{Guid.NewGuid():N}@gettruvoid.com", "CorrectPass123");
+
+        var protector = TenantCredentialProtector.FromBase64("k1", ApiFactory.TenantCredentialKey);
+        await new TenantProvisioner(factory.MigratorConnectionString, protector, NullLogger.Instance).ProvisionPendingAsync();
+
+        var adminEmail = $"platform-{Guid.NewGuid():N}@gettruvoid.com";
+        var bootstrap = await new PlatformAdminBootstrapper(factory.MigratorConnectionString).CreateAsync(adminEmail, "Platform Admin");
+        var adminClient = factory.CreateClient();
+        var adminLogin = await adminClient.PostAsJsonAsync("/v1/admin/auth/login", new { email = adminEmail, password = bootstrap.Password });
+        var adminToken = (await adminLogin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        var credit = await adminClient.PostAsJsonAsync(
+            $"/v1/admin/tenant-wallets/{organization.OrganizationId}/credit", new { amountKobo = 500_000 });
+        Assert.Equal(HttpStatusCode.OK, credit.StatusCode);
+        var body = await credit.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(500_000, body.GetProperty("balanceAfterKobo").GetInt64());
+
+        var invalid = await adminClient.PostAsJsonAsync(
+            $"/v1/admin/tenant-wallets/{organization.OrganizationId}/credit", new { amountKobo = 0 });
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+    }
+
     private static HttpRequestMessage SignedWebhook(string body)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments/flutterwave/webhook")

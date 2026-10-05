@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using TruvoID.Core.Interfaces;
+using TruvoID.Domain.Enums;
 using TruvoID.Infrastructure.Identity;
 using TruvoID.Infrastructure.Postgres;
 
@@ -91,13 +93,21 @@ public static class TenantWalletEndpoints
         }
     }
 
+    // ₦100,000,000 — a typo guard for the admin credit form, not a business limit.
+    private const long MaxCreditKobo = 100_000_000_00;
+
     private static async Task<IResult> CreditOrganizationWallet(
+        HttpContext ctx,
         Guid organizationId,
         CreditWalletRequest request,
         TenantConnectionFactory tenants,
         TenantWalletService wallets,
+        IAuditService audit,
         CancellationToken ct)
     {
+        if (request.AmountKobo is <= 0 or > MaxCreditKobo)
+            return Results.BadRequest(new { error = "Enter an amount between ₦0.01 and ₦100,000,000." });
+
         try
         {
             await using var session = await tenants.BeginAsync(TenantScope.Organization(organizationId), ct);
@@ -111,6 +121,8 @@ public static class TenantWalletEndpoints
                 entryType = "credit_sale"
             }, ct);
             await session.CommitAsync(ct);
+            await audit.LogAsync(AuditAction.WalletCredited, "OrganizationWallet", organizationId, ctx.GetUserId(), "User",
+                $"credited {request.AmountKobo} kobo{(request.Reference is null ? "" : $" ({request.Reference})")}", ct);
             return Results.Ok(new { mutation.WalletId, mutation.BalanceAfterKobo, mutation.LedgerEntryId });
         }
         catch (InsufficientWalletBalanceException ex)
