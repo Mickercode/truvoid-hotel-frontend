@@ -228,7 +228,11 @@ function Shell({
             <div className="avatar">{(profile.fullName || profile.email)[0].toUpperCase()}</div>
           </div>
         </header>
-        {environment === "sandbox" ? (
+        {!isAdmin && profile.organizationStatus === "pending" ? (
+          <div className="sandbox-banner" role="note">
+            <strong>SETTING UP</strong> Your workspace is still being provisioned — verifications and the wallet unlock in a moment. Refresh if this persists.
+          </div>
+        ) : environment === "sandbox" ? (
           <div className="sandbox-banner" role="note">
             <strong>SANDBOX</strong> Test environment — no real identity lookups or payments.
           </div>

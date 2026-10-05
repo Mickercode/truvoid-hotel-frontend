@@ -379,6 +379,60 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.Conflict, approve.StatusCode);
     }
 
+    [Fact]
+    public async Task Live_verification_is_accepted_after_approval()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var email = $"live-{Guid.NewGuid():N}@gettruvoid.com";
+        var organization = await identities.RegisterOrganizationAsync(
+            $"Live {Guid.NewGuid():N}", OrganizationType.Institution, "Live Admin", email, "CorrectPass123");
+
+        var protector = TenantCredentialProtector.FromBase64("k1", ApiFactory.TenantCredentialKey);
+        await new TenantProvisioner(factory.MigratorConnectionString, protector, NullLogger.Instance).ProvisionPendingAsync();
+
+        // Approved profile, a NIN price to bill against, and a funded wallet.
+        await using (var approve = control.CreateCommand("""
+            INSERT INTO control.organization_setup (organization_id, status, access_level, attested_at)
+            VALUES (@org, 'approved', 2, now())
+            ON CONFLICT (organization_id) DO UPDATE SET status = 'approved'
+            """))
+        {
+            approve.Parameters.AddWithValue("org", organization.OrganizationId);
+            await approve.ExecuteNonQueryAsync();
+        }
+        await using (var rate = control.CreateCommand(
+            "INSERT INTO control.platform_rate (verification_type, price_kobo, cost_kobo, effective_from) VALUES ('nin', 5000, 1000, now())"))
+        {
+            await rate.ExecuteNonQueryAsync();
+        }
+
+        var tenants = new TenantConnectionFactory(control, factory.AppConnectionString, protector);
+        await using (var session = await tenants.BeginAsync(TenantScope.Organization(organization.OrganizationId), CancellationToken.None))
+        {
+            await new TenantWalletService().CreditAsync(session, 1_000_000, null, "integration-funds", ct: CancellationToken.None);
+            await session.CommitAsync(CancellationToken.None);
+        }
+
+        var client = factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" });
+        var token = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var me = await client.GetAsync("/v1/auth/me");
+        Assert.True((await me.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("liveEnabled").GetBoolean());
+
+        // A live-mode verification must not be refused with live_not_enabled.
+        var verify = new HttpRequestMessage(HttpMethod.Post, "/v1/verify/nin")
+        {
+            Content = JsonContent.Create(new { number = "00000000001" }),
+        };
+        verify.Headers.Add("X-TruvoID-Mode", "live");
+
+        var response = await client.SendAsync(verify);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
     private static HttpRequestMessage SignedWebhook(string body)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments/flutterwave/webhook")

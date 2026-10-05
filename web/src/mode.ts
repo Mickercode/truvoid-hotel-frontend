@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 export type Mode = 'test' | 'live'
 
@@ -24,11 +24,13 @@ export function setMode(mode: Mode) {
  *  permission, and the shell warns when Live is picked too early. */
 export function useMode(): [Mode, (mode: Mode) => void] {
   const [mode, setState] = useState<Mode>(getMode())
+  // Update local state directly on click (deterministic), and keep other tabs in sync.
+  const change = useCallback((next: Mode) => { setMode(next); setState(next) }, [])
   useEffect(() => {
     const sync = () => setState(getMode())
     window.addEventListener(EVENT, sync)
     window.addEventListener('storage', sync) // other tabs
     return () => { window.removeEventListener(EVENT, sync); window.removeEventListener('storage', sync) }
   }, [])
-  return [mode, setMode]
+  return [mode, change]
 }
