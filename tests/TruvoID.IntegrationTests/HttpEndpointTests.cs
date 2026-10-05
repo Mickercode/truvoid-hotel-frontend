@@ -465,6 +465,52 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.Equal(JsonValueKind.Null, items[0].GetProperty("ledgerEntryId").ValueKind);
     }
 
+    [Fact]
+    public async Task Change_password_rotates_the_login_credentials()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var email = $"pw-{Guid.NewGuid():N}@gettruvoid.com";
+        await identities.RegisterOrganizationAsync(
+            $"PW {Guid.NewGuid():N}", OrganizationType.Institution, "PW Admin", email, "CorrectPass123");
+
+        var client = factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" });
+        var token = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var change = await client.PostAsJsonAsync("/v1/auth/change-password",
+            new { currentPassword = "CorrectPass123", newPassword = "NewPass456" });
+        Assert.Equal(HttpStatusCode.OK, change.StatusCode);
+
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await factory.CreateClient().PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK,
+            (await factory.CreateClient().PostAsJsonAsync("/v1/auth/login", new { email, password = "NewPass456" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task Organization_admin_can_deactivate_the_organization()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var email = $"deact-{Guid.NewGuid():N}@gettruvoid.com";
+        await identities.RegisterOrganizationAsync(
+            $"Deact {Guid.NewGuid():N}", OrganizationType.Institution, "Deact Admin", email, "CorrectPass123");
+
+        var client = factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" });
+        var token = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var deactivate = await client.PostAsJsonAsync("/v1/auth/deactivate", new { password = "CorrectPass123" });
+        Assert.Equal(HttpStatusCode.OK, deactivate.StatusCode);
+
+        // The account/organization can no longer sign in.
+        var after = await factory.CreateClient().PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" });
+        Assert.NotEqual(HttpStatusCode.OK, after.StatusCode);
+    }
+
     private static HttpRequestMessage SignedWebhook(string body)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments/flutterwave/webhook")

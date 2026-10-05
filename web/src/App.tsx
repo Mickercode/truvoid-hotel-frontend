@@ -22,6 +22,7 @@ import { AcceptInvite, AdminLogin, ForgotPassword, Login, Register, ResetPasswor
 import { PricingPage } from "./PricingPage";
 import { ApiKeysAdminPage } from "./ApiKeysAdminPage";
 import { OutletDetailPage } from "./OutletDetailPage";
+import { SettingsPage } from "./SettingsPage";
 import { AdminReview } from "./AdminReview";
 import { CopyButton } from "./CopyButton";
 import { useEnvironment } from "./useEnvironment";
@@ -159,6 +160,7 @@ function Shell({
           ["/verify", "Verify identity"],
           ["/history", "History"],
           ["/wallet", "Wallet"],
+          ["/settings", "Settings"],
         ]
       : [
           ["/dashboard", "Overview"],
@@ -169,6 +171,7 @@ function Shell({
           ["/outlets", "Outlets"],
           ["/api-keys", "API keys"],
           ["/wallet", "Wallet"],
+          ["/settings", "Settings"],
         ];
   const goLiveHint =
     profile.setupStatus === "submitted"
@@ -279,6 +282,7 @@ function Shell({
                 <Route path="/verify" element={<VerifyPage mode={mode} onModeChange={changeMode} />} />
                 <Route path="/history" element={<VerificationHistoryPage />} />
                 <Route path="/wallet" element={<Wallet />} />
+                <Route path="/settings" element={<SettingsPage profile={profile} onLogout={onLogout} />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </>
             ) : (
@@ -292,6 +296,7 @@ function Shell({
                 <Route path="/outlets/:outletId" element={<OutletDetailPage />} />
                 <Route path="/api-keys" element={<ApiKeysPage profile={profile} />} />
                 <Route path="/wallet" element={<Wallet />} />
+                <Route path="/settings" element={<SettingsPage profile={profile} onLogout={onLogout} />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </>
             )}
