@@ -31,21 +31,21 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Restore
-        run: |
-          dotnet restore src/TruvoID.API/TruvoID.API.csproj
-          dotnet restore tests/TruvoID.Tests/TruvoID.Tests.csproj
+        run: dotnet restore TruvoID.slnx
 
       # Warnings stay warnings for now; the build must compile cleanly.
-      - name: Build API
-        run: dotnet build src/TruvoID.API/TruvoID.API.csproj --configuration Release --no-restore
+      - name: Build
+        run: dotnet build TruvoID.slnx --configuration Release --no-restore
 
-      # Includes the Postgres tests (tenant isolation, RLS, money paths) via
-      # Testcontainers — ubuntu-latest has Docker.
+      # Includes the Postgres unit tests (tenant isolation, RLS, money paths) and the
+      # HTTP integration tests (auth policies, webhook, lockout) via Testcontainers —
+      # ubuntu-latest has Docker.
       - name: Test
         run: >
-          dotnet test tests/TruvoID.Tests/TruvoID.Tests.csproj
+          dotnet test TruvoID.slnx
           --configuration Release
-          --logger "trx;LogFileName=results.trx"
+          --no-build
+          --logger "trx"
           --results-directory test-results
 
       - name: Upload test results
@@ -77,6 +77,9 @@ jobs:
 
       - name: Type-check & build
         run: npm run build
+
+      - name: Test
+        run: npm test
 
       - name: Docs page is part of the build
         run: test -f dist/api-docs.html

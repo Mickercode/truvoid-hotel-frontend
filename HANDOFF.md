@@ -1,127 +1,88 @@
 # TruvoID Handoff
 
-## Current State
+## Architecture
 
-The repository contains two frontend surfaces:
+- **API:** `src/TruvoID.API/` — .NET 10 minimal API + PostgreSQL (control plane + per-tenant schemas with RLS). Deployed to Railway via `Dockerfile`.
+- **Web:** `web/` — React + Vite SPA. Deployed to Vercel. **This is the only frontend.**
+- **Tests:** `tests/TruvoID.Tests/` — xUnit + Testcontainers (needs Docker).
 
-- Hosted Blazor app in `Components/`.
-- React migration app in `web/`.
+The former Blazor frontend (`Components/`, root `Program.cs`, `TruvoID.csproj`, `wwwroot/`) has been **removed**. The solution (`TruvoID.slnx`) contains the API and test projects.
 
-The hosted Blazor app remains the primary .NET-hosted experience. The React app builds separately with Vite.
-
-## Completed Work
-
-### React frontend
-
-- Added mobile marketing navigation.
-- Added mobile authenticated navigation.
-- Added keyboard-visible focus states.
-- Added retryable verification-history errors.
-- Added async loading and duplicate-submit protection to setup, team, and API-key flows.
-- Added production API fallback to the current origin instead of localhost.
-- Made the public contact form open a prefilled email to `contact@truvoid.com`.
-- Added reusable clipboard support in `web/src/CopyButton.tsx`.
-- Added copy controls for API keys and team invitation links.
-- Fixed team reactivation to call the backend `reactivate` action.
-
-### Invitation email delivery
-
-- Team invitations now send the existing branded `StaffInvitation` template.
-- Agency invitations now send the same branded invitation template with agency-specific content.
-- Email delivery failures are logged without preventing manual invitation-link fallback.
-- Resend configuration is registered in the API.
-
-### Flutterwave payments
-
-- Added hosted checkout initialization.
-- Added server-side Flutterwave transaction verification.
-- Added signed webhook validation.
-- Added idempotent wallet crediting.
-- Added a tenant `wallet_payment` table migration.
-- Added a Flutterwave checkout button to the hosted Blazor wallet top-up page.
-- Manual bank-transfer funding remains available.
-
-## Flutterwave Configuration
-
-Set these environment variables in the API deployment:
+## Required environment variables (API)
 
 ```text
-FLUTTERWAVE_SECRET_KEY=<Flutterwave secret key>
-FLUTTERWAVE_WEBHOOK_HASH=<Flutterwave webhook secret hash>
+ConnectionStrings__Postgres        DML-only truvo_app role (runtime)
+ConnectionStrings__PostgresMigrator  DDL-owning migrator role (migrate/worker only)
+Postgres__AppRole                  e.g. truvo_app
+Postgres__TenantCredentialKey      base64 32-byte key (openssl rand -base64 32)
+Postgres__TenantCredentialKeyId    e.g. k1
+Jwt__SecretKey                     >= 32 chars; required outside Development
+Jwt__Issuer / Jwt__Audience        default TruvoID
+Cors__Origins__0                   web app origin, e.g. https://gettruvoid.com
+App__BaseUrl                       web app base URL (invite links + payment redirect allowlist)
+Resend__ApiKey (or RESEND_API_KEY) Resend API key for email
+EMAIL_FROM_ADDRESS                 verified Resend sender (default noreply@gettruvoid.com)
+Verification__Provider             idaccess | sandbox
+IDACCESS_API_KEY                   required when Verification__Provider=idaccess
+Flutterwave__SecretKey             Flutterwave secret key
+Flutterwave__WebhookHash           Flutterwave webhook verif-hash
 ```
 
-The configuration keys `Flutterwave:SecretKey` and `Flutterwave:WebhookHash` are also supported.
+`GET /health` reports `environment` and whether `email` is configured.
 
-Configure the Flutterwave webhook endpoint as:
+## Required environment variables (web)
 
 ```text
-POST /v1/payments/flutterwave/webhook
+VITE_API_BASE_URL        API origin, e.g. https://api.gettruvoid.com
+VITE_SUPPORT_WHATSAPP    optional; support number for bank-transfer receipts
 ```
 
-Use Flutterwave sandbox credentials first. Do not commit credentials to the repository.
+If `VITE_API_BASE_URL` is unset in a production build, the SPA falls back to
+`window.location.origin`, which is almost never the API — always set it.
 
-## Required Migration
+## Email (Resend)
 
-The new tenant migration is:
+Email powers invitations and password resets. If `Resend__ApiKey`/`RESEND_API_KEY`
+is missing the API logs a startup warning and `/health` shows `email: not_configured`.
+A `403` from Resend means the sending domain is not verified; verify the domain in
+Resend and set `EMAIL_FROM_ADDRESS` to a sender on it.
 
-```text
-src/TruvoID.API/TruvoID.Infrastructure/Postgres/Migrations/Tenant/0003_flutterwave_payments.sql
-```
+## Payments
 
-Run the existing migration command before testing payments:
+- **Flutterwave:** the React wallet starts hosted checkout and verifies on redirect;
+  the webhook credits idempotently. The checkout `redirectUrl` must be an origin in
+  `Cors:Origins` or `App:BaseUrl` (enforced server-side).
+- **Bank transfer:** the React wallet shows the transfer accounts; platform admins
+  credit the wallet with `POST /v1/admin/tenant-wallets/{organizationId}/credit`
+  (`amountKobo`). There is no self-service manual-topup endpoint.
+
+## Migrations
 
 ```powershell
 dotnet run --project src/TruvoID.API -- migrate
+dotnet run --project src/TruvoID.API -- worker
 ```
 
-## Verification Commands
+Migrations run as the DDL-owning migrator role and refuse to run as a superuser.
+The runtime API only ever holds DML-only credentials.
 
-React build:
+## Verification
 
 ```powershell
-cd web
-npm.cmd run build
+dotnet build TruvoID.slnx -c Release
+dotnet test TruvoID.slnx -c Release        # needs Docker (Testcontainers)
+cd web; npm.cmd run build
+cd web; npm.cmd test                       # Vitest
 ```
 
-API build:
+Tests: `tests/TruvoID.Tests` (unit/DB, links backend source),
+`tests/TruvoID.IntegrationTests` (hosts the real API via `WebApplicationFactory`
+against a real Postgres — auth policies, webhook signature + idempotent crediting,
+login lockout), and Vitest specs under `web/src/*.test.ts`.
 
-```powershell
-cd src/TruvoID.API
-dotnet build --no-restore
-```
+## Known remaining work
 
-Hosted Blazor build:
-
-```powershell
-dotnet build --no-restore
-```
-
-All three builds passed during the last session. The root hosted app has one pre-existing nullable warning in `Components/Pages/ApiKeys.razor`.
-
-## Payment Flow
-
-1. Authenticated user selects an amount of at least NGN 50,000.
-2. API creates a pending tenant `wallet_payment` row.
-3. API initializes Flutterwave checkout and returns the hosted payment URL.
-4. User completes payment on Flutterwave.
-5. Flutterwave webhook or authenticated verification confirms the transaction.
-6. The tenant wallet is credited once using the Flutterwave transaction reference.
-7. A revenue outbox event is written in the same tenant transaction.
-
-## Important Notes
-
-- The checkout initialization currently accepts the redirect URL from the client. Before production, restrict it to an allowlisted application URL.
-- Payment testing requires a provisioned active tenant and the new migration applied to that tenant schema.
-- Webhook handling depends on the transaction reference format generated by the API: `trv_{organizationId}_{uniqueId}`.
-- The React wallet screen does not yet expose Flutterwave checkout; the hosted Blazor wallet page does.
-- Several React workspace screens still need explicit wallet, outlet, and admin API retry states.
-
-## Recommended Next Steps
-
-1. Run tenant migrations in a sandbox database.
-2. Configure Flutterwave sandbox keys and webhook hash.
-3. Test initialization, successful callback verification, duplicate webhook delivery, amount mismatch, and failed payment cases.
-4. Restrict redirect URLs and add a persisted payment status page.
-5. Add Flutterwave checkout to the React wallet screen if React becomes the primary frontend.
-6. Finish React wallet/outlet/admin error and retry states.
-7. Add automated endpoint tests for webhook signature validation and idempotent crediting.
+- The admin UI is React (`/admin/agencies`, `/admin/pricing`, `/admin/api-keys`).
+  The old Blazor admin screens for financials, NIMC config, and audit log had no
+  backing endpoints; build them only if those features are still wanted.
+- Invitation-accept HTTP coverage (the store itself is already unit-tested).
