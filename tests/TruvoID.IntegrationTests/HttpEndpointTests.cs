@@ -340,6 +340,34 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.Conflict, submit.StatusCode);
     }
 
+    [Fact]
+    public async Task Admin_can_request_changes_before_submission_but_not_approve()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var organization = await identities.RegisterOrganizationAsync(
+            $"Incomplete {Guid.NewGuid():N}", OrganizationType.Institution, "Incomplete Admin",
+            $"incomplete-{Guid.NewGuid():N}@gettruvoid.com", "CorrectPass123");
+
+        var adminEmail = $"platform-{Guid.NewGuid():N}@gettruvoid.com";
+        var bootstrap = await new PlatformAdminBootstrapper(factory.MigratorConnectionString).CreateAsync(adminEmail, "Platform Admin");
+        var adminClient = factory.CreateClient();
+        var adminLogin = await adminClient.PostAsJsonAsync("/v1/admin/auth/login", new { email = adminEmail, password = bootstrap.Password });
+        var adminToken = (await adminLogin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        // A reviewer can send an unfinished profile back with guidance...
+        var changes = await adminClient.PostAsJsonAsync(
+            $"/v1/admin/organizations/{organization.OrganizationId}/setup/request-changes",
+            new { note = "Please finish and resubmit." });
+        Assert.Equal(HttpStatusCode.OK, changes.StatusCode);
+
+        // ...but cannot approve a profile that was never submitted.
+        var approve = await adminClient.PostAsJsonAsync(
+            $"/v1/admin/organizations/{organization.OrganizationId}/setup/approve", new { note = (string?)null });
+        Assert.Equal(HttpStatusCode.Conflict, approve.StatusCode);
+    }
+
     private static HttpRequestMessage SignedWebhook(string body)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments/flutterwave/webhook")

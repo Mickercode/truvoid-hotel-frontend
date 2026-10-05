@@ -139,10 +139,17 @@ public sealed class OrganizationSetupStore(NpgsqlDataSource dataSource)
     {
         if (!approve && string.IsNullOrWhiteSpace(note))
             throw new ArgumentException("Tell the organization what needs to change.");
-        await using var command = dataSource.CreateCommand("""
+        await EnsureAsync(organizationId, ct);
+        // Approval only makes sense for a profile the organization actually submitted.
+        // Sending a profile back with guidance is also allowed before submission, so a
+        // reviewer can prompt an organization that hasn't finished.
+        var eligible = approve
+            ? "status = 'submitted'"
+            : "status IN ('submitted', 'incomplete', 'needs_changes')";
+        await using var command = dataSource.CreateCommand($"""
             UPDATE control.organization_setup
             SET status = @status, review_note = @note, reviewed_at = now(), reviewed_by = @reviewer, updated_at = now()
-            WHERE organization_id = @organizationId AND status = 'submitted'
+            WHERE organization_id = @organizationId AND {eligible}
             """);
         command.Parameters.AddWithValue("status", approve ? "approved" : "needs_changes");
         command.Parameters.AddWithValue("note", string.IsNullOrWhiteSpace(note) ? DBNull.Value : note.Trim());

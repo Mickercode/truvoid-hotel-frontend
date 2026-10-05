@@ -92,16 +92,17 @@ export function AdminReview({ organization, onClose, onDecided }: {
         <strong>{d.fileName}</strong><span>{d.documentType.replace(/_/g, ' ')}</span>
         <button className="link-button" onClick={() => void openDocument(d.id)}>Open ↗</button>
       </div>)}</div> : <div className="empty">No documents uploaded.</div>}
-      {reviewable ? <div className="review-decision">
+      {setup.status === 'approved' ? <p className="stat-note">This profile is approved. Live verification is enabled.</p> : <div className="review-decision">
         <label className="field"><span>Note to the organization (required to request changes)</span>
           <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Upload a CAC certificate dated within the last 12 months." /></label>
         <div className="review-actions">
-          <button className="button button-primary" disabled={busy !== null} onClick={() => void decide('approve')}>
+          <button className="button button-primary" disabled={busy !== null || !reviewable} onClick={() => void decide('approve')}>
             {busy === 'approve' ? <><span className="spinner" aria-hidden="true" />Approving…</> : 'Approve — enable live ↗'}</button>
           <button className="button button-secondary" disabled={busy !== null} onClick={() => void decide('changes')}>
             {busy === 'changes' ? 'Sending…' : 'Request changes'}</button>
         </div>
-      </div> : <p className="stat-note">Only submitted profiles can be approved or sent back.</p>}
+        {!reviewable && <p className="stat-note">Approval unlocks once the organization submits its profile. You can still send it back with a note.</p>}
+      </div>}
     </>}
     {message && setup && <div className={`notice ${message.error ? 'error' : 'success'}`} role="status">{message.text}</div>}
   </div>
