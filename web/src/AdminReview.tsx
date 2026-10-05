@@ -77,10 +77,12 @@ export function AdminReview({ organization, onClose, onDecided }: {
       </p>
       <div className="review-sections">
         {Object.entries(SECTION_TITLES).map(([key, title]) => {
-          const values = Object.entries(setup.sections[key] ?? {}).filter(([, v]) => v !== '' && v !== null && v !== false)
+          // Show every field the organization saved, including blank ones, so the
+          // reviewer can see the profile as submitted rather than a false "Not provided".
+          const entries = Object.entries(setup.sections[key] ?? {})
           return <div className="review-section" key={key}>
             <h3>{title}</h3>
-            {values.length ? <dl>{values.map(([k, v]) => <div key={k}><dt>{label(k)}</dt><dd>{display(v)}</dd></div>)}</dl>
+            {entries.length ? <dl>{entries.map(([k, v]) => <div key={k}><dt>{label(k)}</dt><dd>{display(v) || <span className="muted">—</span>}</dd></div>)}</dl>
               : <p className="muted">Not provided</p>}
           </div>
         })}

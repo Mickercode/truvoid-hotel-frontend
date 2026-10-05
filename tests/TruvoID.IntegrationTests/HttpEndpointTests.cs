@@ -217,7 +217,10 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
 
         foreach (var section in new[] { "general", "contacts", "business", "ownership", "directors", "services", "compliance", "legal" })
         {
-            var save = await client.PutAsJsonAsync($"/v1/tenant/setup/{section}", new { filled = true });
+            object payload = section == "general"
+                ? new { registeredCompanyName = "Acme Ltd", country = "Nigeria" }
+                : new { filled = true };
+            var save = await client.PutAsJsonAsync($"/v1/tenant/setup/{section}", payload);
             Assert.Equal(HttpStatusCode.OK, save.StatusCode);
         }
         Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync("/v1/tenant/setup/access-level", new { level = 2 })).StatusCode);
@@ -241,6 +244,13 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.OK, adminLogin.StatusCode);
         var adminToken = (await adminLogin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
         adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        // The admin review must see the submitted section data, not an empty profile.
+        var review = await adminClient.GetAsync($"/v1/admin/organizations/{organization.OrganizationId}/setup");
+        Assert.Equal(HttpStatusCode.OK, review.StatusCode);
+        var reviewBody = await review.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("submitted", reviewBody.GetProperty("status").GetString());
+        Assert.Equal("Acme Ltd", reviewBody.GetProperty("sections").GetProperty("general").GetProperty("registeredCompanyName").GetString());
 
         var approve = await adminClient.PostAsJsonAsync($"/v1/admin/organizations/{organization.OrganizationId}/setup/approve", new { note = (string?)null });
         Assert.Equal(HttpStatusCode.OK, approve.StatusCode);
@@ -303,6 +313,31 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         var invalid = await adminClient.PostAsJsonAsync(
             $"/v1/admin/tenant-wallets/{organization.OrganizationId}/credit", new { amountKobo = 0 });
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+    }
+
+    [Fact]
+    public async Task Submit_rejects_a_profile_with_only_blank_sections()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var email = $"blank-{Guid.NewGuid():N}@gettruvoid.com";
+        await identities.RegisterOrganizationAsync(
+            $"Blank {Guid.NewGuid():N}", OrganizationType.Institution, "Blank Admin", email, "CorrectPass123");
+
+        var client = factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" });
+        var token = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        // A section with only blank values is not "provided" and must not count as complete.
+        foreach (var section in new[] { "general", "contacts", "business", "ownership", "directors", "services", "compliance", "legal" })
+        {
+            var save = await client.PutAsJsonAsync($"/v1/tenant/setup/{section}", new { field = "" });
+            Assert.Equal(HttpStatusCode.OK, save.StatusCode);
+        }
+
+        var submit = await client.PostAsync("/v1/tenant/setup/submit", new StringContent(""));
+        Assert.Equal(HttpStatusCode.Conflict, submit.StatusCode);
     }
 
     private static HttpRequestMessage SignedWebhook(string body)

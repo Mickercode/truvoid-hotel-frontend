@@ -162,7 +162,32 @@ public static class OrganizationSetupEndpoints
         return (int)Math.Round(complete * 100d / (RequiredSections.Length + 3));
     }
 
-    private static bool IsEmpty(string json) => json is "{}" or "null" or "[]";
+    // A section counts as provided only if it has at least one meaningful value.
+    // Previously {"field":""} (or only unchecked booleans) counted as complete, so a
+    // blank profile could be marked 100% and submitted, and the reviewer then saw
+    // "Not provided" everywhere.
+    private static bool IsEmpty(string json)
+    {
+        if (json is "{}" or "null" or "[]") return true;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return !HasMeaningfulValue(document.RootElement);
+        }
+        catch (JsonException)
+        {
+            return true;
+        }
+    }
+
+    private static bool HasMeaningfulValue(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Object => element.EnumerateObject().Any(property => HasMeaningfulValue(property.Value)),
+        JsonValueKind.Array => element.EnumerateArray().Any(HasMeaningfulValue),
+        JsonValueKind.String => !string.IsNullOrWhiteSpace(element.GetString()),
+        JsonValueKind.False or JsonValueKind.Null or JsonValueKind.Undefined => false,
+        _ => true, // numbers, true
+    };
 
     public sealed record AccessLevelRequest(short Level);
     public sealed record AttestationRequest(bool Accepted);

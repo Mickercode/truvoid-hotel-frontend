@@ -28,9 +28,30 @@ const sections = [
 
 export function OrganizationSetupPage() {
   const [setup, setSetup] = useState<Setup | null>(null); const [active, setActive] = useState('general'); const [draft, setDraft] = useState<Json>({}); const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
-  async function load() { const result = await api.get<Setup>('/v1/tenant/setup'); setSetup(result); setDraft(result.sections[active] ?? {}) }
+  async function load() { const result = await api.get<Setup>('/v1/tenant/setup'); setSetup(result); setDraft(result.sections[active] ?? {}); return result }
   useEffect(() => { void load().catch(() => setError('Organization setup could not be loaded.')) }, [])
-  function select(section: string) { setActive(section); setDraft(setup?.sections[section] ?? {}); setMessage(''); setError('') }
+  // Switching sections first persists the current one, so an administrator who fills
+  // several sections without pressing "Save section" doesn't silently lose edits.
+  async function select(section: string) {
+    if (busy) return
+    const tabs = ['access', 'documents', 'review']
+    const unsaved = setup && setup.editable !== false && active !== section && !tabs.includes(active)
+      && JSON.stringify(draft) !== JSON.stringify(setup.sections[active] ?? {})
+    if (unsaved) {
+      setBusy(true)
+      try {
+        await api.put(`/v1/tenant/setup/${active}`, draft)
+        const refreshed = await load()
+        setBusy(false)
+        setActive(section); setDraft(refreshed.sections[section] ?? {}); setMessage(''); setError('')
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : 'Could not save the current section.')
+        setBusy(false)
+      }
+      return
+    }
+    setActive(section); setDraft(setup?.sections[section] ?? {}); setMessage(''); setError('')
+  }
   async function save(event?: FormEvent) { event?.preventDefault(); if (busy) return; setBusy(true); try { await api.put(`/v1/tenant/setup/${active}`, draft); setMessage('Section saved.'); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save section.') } finally { setBusy(false) } }
   async function saveAccess(level: number) { if (busy) return; setBusy(true); try { await api.put('/v1/tenant/setup/access-level', { level }); setMessage('Access level saved.'); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save access level.') } finally { setBusy(false) } }
   async function attest() { if (busy) return; setBusy(true); try { await api.put('/v1/tenant/setup/attestation', { accepted: true }); setMessage('Attestation saved.'); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save attestation.') } finally { setBusy(false) } }
@@ -39,7 +60,7 @@ export function OrganizationSetupPage() {
   if (!setup) return <section><div className="empty">Loading organization setup...</div></section>
   const current = sections.find(section => section[0] === active) ?? sections[0]
   const locked = setup.editable === false
-  return <section><div className="page-title"><div className="eyebrow">ORGANIZATION SETUP</div><h1>Complete your profile.</h1><p className="lede">Save each section as you go. You can leave optional integration details for later.</p></div><ReviewStatus setup={setup} /><div className="setup-progress"><div><span className="stat-label">PROFILE COMPLETION</span><strong>{setup.progress}%</strong></div><div className="progress-track"><span style={{ width: `${setup.progress}%` }} /></div></div><div className="setup-layout"><aside className="setup-nav">{sections.map(section => <button disabled={busy} className={active === section[0] ? 'step active' : 'step'} key={section[0]} onClick={() => select(section[0])}>{section[1]}</button>)}<button disabled={busy} className={active === 'access' ? 'step active' : 'step'} onClick={() => select('access')}>Access level</button><button disabled={busy} className={active === 'documents' ? 'step active' : 'step'} onClick={() => select('documents')}>Documents</button><button disabled={busy} className={active === 'review' ? 'step active' : 'step'} onClick={() => select('review')}>Review & submit</button></aside><main className="form-card setup-card">{active === 'access' ? <AccessLevel value={setup.accessLevel} onSave={saveAccess} busy={busy || locked} /> : active === 'documents' ? <Documents documents={setup.documents} onUpload={upload} busy={busy || locked} /> : active === 'review' ? <Review setup={setup} onAttest={attest} onSubmit={submit} busy={busy || locked} /> : <><div className="eyebrow">{current[0].toUpperCase()} / PROFILE</div><h2>{current[1]}</h2><p className="lede">{current[2]}</p><form onSubmit={save}><fieldset className="setup-fieldset" disabled={locked}><SectionFields section={active} values={draft} onChange={setDraft} /></fieldset><div className="setup-actions"><button disabled={busy || locked} className="button button-primary">{busy ? 'Saving...' : 'Save section ↗'}</button>{message && <span className="stat-note">{message}</span>}{error && <span className="notice error">{error}</span>}</div></form></>}</main></div></section>
+  return <section><div className="page-title"><div className="eyebrow">ORGANIZATION SETUP</div><h1>Complete your profile.</h1><p className="lede">Save each section as you go. You can leave optional integration details for later.</p></div><ReviewStatus setup={setup} /><div className="setup-progress"><div><span className="stat-label">PROFILE COMPLETION</span><strong>{setup.progress}%</strong></div><div className="progress-track"><span style={{ width: `${setup.progress}%` }} /></div></div><div className="setup-layout"><aside className="setup-nav">{sections.map(section => <button disabled={busy} className={active === section[0] ? 'step active' : 'step'} key={section[0]} onClick={() => void select(section[0])}>{section[1]}</button>)}<button disabled={busy} className={active === 'access' ? 'step active' : 'step'} onClick={() => void select('access')}>Access level</button><button disabled={busy} className={active === 'documents' ? 'step active' : 'step'} onClick={() => void select('documents')}>Documents</button><button disabled={busy} className={active === 'review' ? 'step active' : 'step'} onClick={() => void select('review')}>Review & submit</button></aside><main className="form-card setup-card">{active === 'access' ? <AccessLevel value={setup.accessLevel} onSave={saveAccess} busy={busy || locked} /> : active === 'documents' ? <Documents documents={setup.documents} onUpload={upload} busy={busy || locked} /> : active === 'review' ? <Review setup={setup} onAttest={attest} onSubmit={submit} busy={busy || locked} /> : <><div className="eyebrow">{current[0].toUpperCase()} / PROFILE</div><h2>{current[1]}</h2><p className="lede">{current[2]}</p><form onSubmit={save}><fieldset className="setup-fieldset" disabled={locked}><SectionFields section={active} values={draft} onChange={setDraft} /></fieldset><div className="setup-actions"><button disabled={busy || locked} className="button button-primary">{busy ? 'Saving...' : 'Save section ↗'}</button>{message && <span className="stat-note">{message}</span>}{error && <span className="notice error">{error}</span>}</div></form></>}</main></div></section>
 }
 
 function SectionFields({ section, values, onChange }: { section: string; values: Json; onChange: (values: Json) => void }) {
