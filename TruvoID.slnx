@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TruvoID.API/TruvoID.API.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TruvoID.IntegrationTests/TruvoID.IntegrationTests.csproj" />
+    <Project Path="tests/TruvoID.Tests/TruvoID.Tests.csproj" />
+  </Folder>
+</Solution>
