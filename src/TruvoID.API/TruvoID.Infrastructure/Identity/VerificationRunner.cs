@@ -19,8 +19,8 @@ public sealed record VerificationOutcome(
     /// <summary>True when this is the stored answer to an earlier request with the same idempotency key.</summary>
     bool Replayed);
 
-public sealed class IdentityProviderUnavailableException()
-    : InvalidOperationException("Identity verification is temporarily unavailable. You have not been charged.");
+public sealed class IdentityProviderUnavailableException(string? message = null)
+    : InvalidOperationException(message ?? "Identity verification is temporarily unavailable. You have not been charged.");
 
 /// <summary>
 /// One verification, end to end:
@@ -60,7 +60,8 @@ public sealed class VerificationRunner(
         if (idempotencyKey is { Length: > 128 })
             throw new ArgumentException("Idempotency-Key must be 128 characters or fewer.");
         if (!source.IsConfigured)
-            throw new IdentityProviderUnavailableException();
+            throw new IdentityProviderUnavailableException(
+                "Live verification is not configured on this deployment (the identity provider API key is missing). Contact TruvoID support.");
 
         if (idempotencyKey is not null)
         {

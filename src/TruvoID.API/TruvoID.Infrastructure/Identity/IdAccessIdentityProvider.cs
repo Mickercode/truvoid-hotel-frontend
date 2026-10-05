@@ -39,6 +39,7 @@ public sealed class IdAccessIdentityProvider(
             Content = JsonContent.Create(new Dictionary<string, string> { [field] = subject }),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey!.Trim());
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.Add("Idempotency-Key", idempotencyKey);
 
         HttpResponseMessage response;

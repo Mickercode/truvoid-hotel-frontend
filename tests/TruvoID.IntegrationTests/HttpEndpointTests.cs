@@ -200,6 +200,74 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.Equal("suspended", (await after.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString());
     }
 
+    [Fact]
+    public async Task Profile_setup_can_upload_submit_and_be_approved()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var email = $"setup-{Guid.NewGuid():N}@gettruvoid.com";
+        var organization = await identities.RegisterOrganizationAsync(
+            $"Setup {Guid.NewGuid():N}", OrganizationType.Institution, "Setup Admin", email, "CorrectPass123");
+
+        var client = factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" });
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        var token = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        foreach (var section in new[] { "general", "contacts", "business", "ownership", "directors", "services", "compliance", "legal" })
+        {
+            var save = await client.PutAsJsonAsync($"/v1/tenant/setup/{section}", new { filled = true });
+            Assert.Equal(HttpStatusCode.OK, save.StatusCode);
+        }
+        Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync("/v1/tenant/setup/access-level", new { level = 2 })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync("/v1/tenant/setup/attestation", new { accepted = true })).StatusCode);
+
+        using var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(Encoding.ASCII.GetBytes("%PDF-1.4 test document"));
+        file.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
+        form.Add(file, "file", "certificate.pdf");
+        form.Add(new StringContent("certificate_of_incorporation"), "documentType");
+        var upload = await client.PostAsync("/v1/tenant/setup/documents", form);
+        Assert.Equal(HttpStatusCode.OK, upload.StatusCode);
+
+        var submit = await client.PostAsync("/v1/tenant/setup/submit", new StringContent(""));
+        Assert.Equal(HttpStatusCode.OK, submit.StatusCode);
+
+        var adminEmail = $"platform-{Guid.NewGuid():N}@gettruvoid.com";
+        var bootstrap = await new PlatformAdminBootstrapper(factory.MigratorConnectionString).CreateAsync(adminEmail, "Platform Admin");
+        var adminClient = factory.CreateClient();
+        var adminLogin = await adminClient.PostAsJsonAsync("/v1/admin/auth/login", new { email = adminEmail, password = bootstrap.Password });
+        Assert.Equal(HttpStatusCode.OK, adminLogin.StatusCode);
+        var adminToken = (await adminLogin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        var approve = await adminClient.PostAsJsonAsync($"/v1/admin/organizations/{organization.OrganizationId}/setup/approve", new { note = (string?)null });
+        Assert.Equal(HttpStatusCode.OK, approve.StatusCode);
+    }
+
+    [Fact]
+    public async Task Document_upload_rejects_a_disallowed_file_type()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var email = $"reject-{Guid.NewGuid():N}@gettruvoid.com";
+        await identities.RegisterOrganizationAsync(
+            $"Reject {Guid.NewGuid():N}", OrganizationType.Institution, "Reject Admin", email, "CorrectPass123");
+
+        var client = factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/v1/auth/login", new { email, password = "CorrectPass123" });
+        var token = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        using var form = new MultipartFormDataContent();
+        form.Add(new ByteArrayContent(Encoding.ASCII.GetBytes("MZ")), "file", "malware.exe");
+        form.Add(new StringContent("other"), "documentType");
+        var response = await client.PostAsync("/v1/tenant/setup/documents", form);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     private static HttpRequestMessage SignedWebhook(string body)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments/flutterwave/webhook")

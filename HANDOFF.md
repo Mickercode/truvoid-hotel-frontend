@@ -24,6 +24,8 @@ Resend__ApiKey (or RESEND_API_KEY) Resend API key for email
 EMAIL_FROM_ADDRESS                 verified Resend sender (default noreply@gettruvoid.com)
 Verification__Provider             idaccess | sandbox
 IDACCESS_API_KEY                   required when Verification__Provider=idaccess
+                                   (also accepts IdAccess__ApiKey / IdAccess__SecretKey / IDACCESS_SECRET_KEY)
+IDACCESS_BASE_URL                  optional; default https://idaccess.info/v1
 Flutterwave__SecretKey             Flutterwave secret key
 Flutterwave__WebhookHash           Flutterwave webhook verif-hash
 ```

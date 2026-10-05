@@ -73,27 +73,44 @@ public static class OrganizationSetupEndpoints
     }
 
     private const long MaxDocumentBytes = 10 * 1024 * 1024;
-    private static readonly string[] AllowedDocumentTypes = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
+
+    // Validation is by file extension, not the browser-supplied content type: browsers
+    // routinely send application/octet-stream (or the wrong type) for PDFs and Office
+    // files, which made legitimate uploads fail. The stored content type is chosen here,
+    // never trusted from the client, and documents are served as attachments.
+    private static readonly Dictionary<string, string> AllowedDocumentExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".pdf"] = "application/pdf",
+        [".png"] = "image/png",
+        [".jpg"] = "image/jpeg",
+        [".jpeg"] = "image/jpeg",
+        [".webp"] = "image/webp",
+        [".doc"] = "application/msword",
+        [".docx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        [".xls"] = "application/vnd.ms-excel",
+        [".xlsx"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        [".csv"] = "text/csv",
+        [".txt"] = "text/plain",
+    };
 
     private static async Task<IResult> UploadDocument(HttpContext ctx, IFormFile file, [Microsoft.AspNetCore.Mvc.FromForm] string documentType, OrganizationSetupStore setup, CancellationToken ct) // documentType arrives as a multipart field, not a query parameter
     {
         if (string.IsNullOrWhiteSpace(documentType) || file is null)
             return Results.BadRequest(new { error = "Document type and file are required." });
-        // Validate size and type from metadata before buffering the body into memory,
-        // and only trust an allowlisted content type (never the client's raw value —
-        // it is stored and later served back to platform admins).
+        // Validate size before buffering the body into memory.
         if (file.Length is <= 0 or > MaxDocumentBytes)
             return Results.BadRequest(new { error = "Documents must be between 1 byte and 10 MB." });
-        if (!AllowedDocumentTypes.Contains(file.ContentType, StringComparer.OrdinalIgnoreCase))
-            return Results.BadRequest(new { error = "Documents must be PDF, PNG, JPEG, or WebP." });
-        var contentType = AllowedDocumentTypes.First(t => string.Equals(t, file.ContentType, StringComparison.OrdinalIgnoreCase));
+        if (!AllowedDocumentExtensions.TryGetValue(Path.GetExtension(file.FileName), out var contentType))
+            return Results.BadRequest(new { error = "Upload a PDF, image, Word, Excel, CSV, or text document." });
+        var fileName = Path.GetFileName(file.FileName);
+        if (string.IsNullOrWhiteSpace(fileName)) fileName = "document";
 
         await using var stream = file.OpenReadStream();
         using var memory = new MemoryStream();
         await stream.CopyToAsync(memory, ct);
         try
         {
-            var document = await setup.AddDocumentAsync(ctx.GetOrganizationId(), ctx.GetUserId(), documentType, Path.GetFileName(file.FileName), contentType, memory.ToArray(), ct);
+            var document = await setup.AddDocumentAsync(ctx.GetOrganizationId(), ctx.GetUserId(), documentType, fileName, contentType, memory.ToArray(), ct);
             return Results.Ok(document);
         }
         catch (ArgumentException ex)
@@ -105,12 +122,17 @@ public static class OrganizationSetupEndpoints
     private static async Task<IResult> Submit(HttpContext ctx, OrganizationSetupStore setup, CancellationToken ct)
     {
         var snapshot = await setup.GetAsync(ctx.GetOrganizationId(), ct);
-        var complete = RequiredSections.All(section => !IsEmpty(snapshot.Sections[section]))
-            && snapshot.AccessLevel is >= 1 and <= 5
-            && snapshot.AttestedAt.HasValue
-            && snapshot.Documents.Count > 0;
-        if (!complete)
-            return Results.Conflict(new { error = "Complete the required organization sections, one access level, one document, and the attestation before submitting." });
+
+        // Tell the caller exactly what's still missing instead of a generic refusal.
+        var missing = new List<string>();
+        var missingSections = RequiredSections.Where(section => IsEmpty(snapshot.Sections[section])).ToArray();
+        if (missingSections.Length > 0) missing.Add($"the {string.Join(", ", missingSections)} section(s)");
+        if (snapshot.AccessLevel is not (>= 1 and <= 5)) missing.Add("an access level");
+        if (!snapshot.AttestedAt.HasValue) missing.Add("the attestation");
+        if (snapshot.Documents.Count == 0) missing.Add("at least one document");
+        if (missing.Count > 0)
+            return Results.Conflict(new { error = $"Before submitting, add {string.Join("; ", missing)}.", code = "setup_incomplete" });
+
         if (!await setup.SubmitAsync(ctx.GetOrganizationId(), ct))
             return Results.Conflict(new { error = "Your profile is already under review or approved.", code = "setup_locked" });
         return Results.Ok(new { message = "Organization profile submitted. TruvoID will review it and unlock live verification once approved." });

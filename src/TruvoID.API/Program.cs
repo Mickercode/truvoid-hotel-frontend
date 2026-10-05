@@ -194,11 +194,20 @@ builder.Services.AddScoped<FlutterwavePaymentService>();
 // Verification__Provider=sandbox makes this deployment a sandbox: no upstream calls,
 // documented test numbers, responses labelled "environment": "sandbox".
 var verificationProvider = (builder.Configuration["Verification:Provider"] ?? "idaccess").Trim().ToLowerInvariant();
+var idaccessBaseUrl = (builder.Configuration["IdAccess:BaseUrl"]
+    ?? Environment.GetEnvironmentVariable("IDACCESS_BASE_URL")
+    ?? "https://idaccess.info/v1").TrimEnd('/');
 builder.Services.AddHttpClient(IdAccessIdentityProvider.HttpClientName, client =>
 {
-    client.BaseAddress = new Uri((builder.Configuration["IdAccess:BaseUrl"] ?? "https://idaccess.info/v1").TrimEnd('/') + "/");
+    client.BaseAddress = new Uri(idaccessBaseUrl + "/");
     client.Timeout = VerificationRunner.ProviderTimeout + TimeSpan.FromSeconds(5);
 });
+// The key is accepted under several names so a deployment that copied the older
+// Slogani config (IDACCESS_SECRET_KEY) still works instead of silently going unconfigured.
+var idaccessApiKey = builder.Configuration["IdAccess:ApiKey"]
+    ?? builder.Configuration["IdAccess:SecretKey"]
+    ?? Environment.GetEnvironmentVariable("IDACCESS_API_KEY")
+    ?? Environment.GetEnvironmentVariable("IDACCESS_SECRET_KEY");
 // Every workspace has free test mode, served by this provider (see VerificationRunner).
 builder.Services.AddSingleton<SandboxIdentityProvider>();
 builder.Services.AddSingleton<IIdentityProvider>(sp => verificationProvider switch
@@ -206,7 +215,7 @@ builder.Services.AddSingleton<IIdentityProvider>(sp => verificationProvider swit
     "sandbox" => sp.GetRequiredService<SandboxIdentityProvider>(),
     "idaccess" => new IdAccessIdentityProvider(
         sp.GetRequiredService<IHttpClientFactory>(),
-        builder.Configuration["IdAccess:ApiKey"] ?? Environment.GetEnvironmentVariable("IDACCESS_API_KEY"),
+        idaccessApiKey,
         sp.GetRequiredService<ILogger<IdAccessIdentityProvider>>()),
     _ => throw new InvalidOperationException($"Unknown Verification:Provider '{verificationProvider}'. Use 'idaccess' or 'sandbox'."),
 });
@@ -374,6 +383,8 @@ app.MapGet("/health", () => Results.Ok(new
 {
     status = "ok",
     environment = identityProvider.Environment,
+    provider = verificationProvider,
+    verification = identityProvider.IsConfigured ? "configured" : "not_configured",
     email = emailConfigured ? "configured" : "not_configured",
 })).AllowAnonymous();
 app.MapTruvoIdEndpoints();
