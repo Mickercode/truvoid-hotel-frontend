@@ -232,15 +232,23 @@ function Shell({
           <div className="sandbox-banner" role="note">
             <strong>SANDBOX</strong> Test environment — no real identity lookups or payments.
           </div>
+        ) : !isAdmin && mode === "live" ? (
+          <div className="sandbox-banner live" role="note">
+            <strong>LIVE MODE</strong> Real identity lookups — each verification is charged to your wallet balance.
+          </div>
+        ) : !isAdmin && mode === "test" && liveEnabled ? (
+          <div className="sandbox-banner live" role="note">
+            <strong>LIVE MODE AVAILABLE</strong> Your profile is approved —{" "}
+            <button type="button" className="link-button" onClick={() => changeMode("live")}>
+              switch to Live
+            </button>{" "}
+            to run real, billed verifications.
+          </div>
         ) : !isAdmin && mode === "test" ? (
           <div className="sandbox-banner" role="note">
-            <strong>TEST MODE</strong> Verifications are free and use test numbers — nothing real is looked up.
-            {!liveEnabled && (
-              <>
-                {" "}{goLiveHint}{" "}
-                {profile.setupStatus !== "submitted" && <Link to="/setup">Continue setup →</Link>}
-              </>
-            )}
+            <strong>TEST MODE</strong> Verifications are free and use test numbers — nothing real is looked up.{" "}
+            {goLiveHint}{" "}
+            {profile.setupStatus !== "submitted" && <Link to="/setup">Continue setup →</Link>}
           </div>
         ) : null}
         <div className="page-content">
