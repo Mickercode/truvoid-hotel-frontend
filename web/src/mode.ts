@@ -11,11 +11,21 @@ const EVENT = 'truvoid:mode-changed'
  * not a permission. Anything unset is test — live is never the accidental default.
  */
 export function getMode(): Mode {
-  return localStorage.getItem(KEY) === 'live' ? 'live' : 'test'
+  try {
+    return localStorage.getItem(KEY) === 'live' ? 'live' : 'test'
+  } catch {
+    return 'test'
+  }
 }
 
 export function setMode(mode: Mode) {
-  localStorage.setItem(KEY, mode)
+  // Storage can be unavailable (private mode, blocked cookies). Never let a failed
+  // write stop the switch from working for this session.
+  try {
+    localStorage.setItem(KEY, mode)
+  } catch {
+    /* ignore */
+  }
   window.dispatchEvent(new Event(EVENT))
 }
 
@@ -24,8 +34,8 @@ export function setMode(mode: Mode) {
  *  permission, and the shell warns when Live is picked too early. */
 export function useMode(): [Mode, (mode: Mode) => void] {
   const [mode, setState] = useState<Mode>(getMode())
-  // Update local state directly on click (deterministic), and keep other tabs in sync.
-  const change = useCallback((next: Mode) => { setMode(next); setState(next) }, [])
+  // Update local state first (deterministic), then persist; keep other tabs in sync.
+  const change = useCallback((next: Mode) => { setState(next); setMode(next) }, [])
   useEffect(() => {
     const sync = () => setState(getMode())
     window.addEventListener(EVENT, sync)

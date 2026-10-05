@@ -28,6 +28,8 @@ import { useEnvironment } from "./useEnvironment";
 import { useMode } from "./mode";
 
 type Json = Record<string, unknown>;
+// Bumped by hand so the deployed bundle can be identified at a glance (sidebar footer).
+const APP_BUILD = "mode-switch-v2";
 function Field({
   label,
   ...props
@@ -199,6 +201,7 @@ function Shell({
           <div className="status">
             <span /> API operational
           </div>
+          <div className="status" style={{ opacity: 0.4 }}>build {APP_BUILD}</div>
           <button className="sign-out" onClick={onLogout}>
             Sign out
           </button>
