@@ -22,6 +22,7 @@ import { AcceptInvite, AdminLogin, ForgotPassword, Login, Register, ResetPasswor
 import { PricingPage } from "./PricingPage";
 import { ApiKeysAdminPage } from "./ApiKeysAdminPage";
 import { AdminAuditPage } from "./AdminAuditPage";
+import { AdminFinancialsPage } from "./AdminFinancialsPage";
 import { OutletDetailPage } from "./OutletDetailPage";
 import { SettingsPage } from "./SettingsPage";
 import { AdminReview } from "./AdminReview";
@@ -155,6 +156,7 @@ function Shell({
   const items = isAdmin
     ? [
         ["/admin/agencies", "Organizations"],
+        ["/admin/financials", "Financials"],
         ["/admin/pricing", "Pricing"],
         ["/admin/api-keys", "API keys"],
         ["/admin/audit", "Activity log"],
@@ -285,6 +287,7 @@ function Shell({
             {isAdmin ? (
               <>
                 <Route path="/admin/agencies" element={<InviteAgency />} />
+                <Route path="/admin/financials" element={<AdminFinancialsPage />} />
                 <Route path="/admin/pricing" element={<PricingPage />} />
                 <Route path="/admin/api-keys" element={<ApiKeysAdminPage />} />
                 <Route path="/admin/audit" element={<AdminAuditPage />} />

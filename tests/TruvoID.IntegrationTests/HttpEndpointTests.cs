@@ -527,6 +527,39 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.True(items.GetArrayLength() >= 1);
     }
 
+    [Fact]
+    public async Task Platform_admin_can_read_financials()
+    {
+        await using var control = NpgsqlDataSource.Create(factory.AppConnectionString);
+        var identities = new ControlPlaneIdentityStore(control);
+        var organization = await identities.RegisterOrganizationAsync(
+            $"Fin {Guid.NewGuid():N}", OrganizationType.Institution, "Fin Admin",
+            $"fin-{Guid.NewGuid():N}@gettruvoid.com", "CorrectPass123");
+
+        await using (var seed = control.CreateCommand("""
+            INSERT INTO control.slogani_revenue_ledger (occurred_at, organization_id, entry_type, amount_kobo, verification_type)
+            VALUES (now(), @org, 'credit_sale', 5000, 'nin'),
+                   (now(), @org, 'refund', -1000, 'nin')
+            """))
+        {
+            seed.Parameters.AddWithValue("org", organization.OrganizationId);
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        var adminEmail = $"platform-{Guid.NewGuid():N}@gettruvoid.com";
+        var bootstrap = await new PlatformAdminBootstrapper(factory.MigratorConnectionString).CreateAsync(adminEmail, "Platform Admin");
+        var adminClient = factory.CreateClient();
+        var adminLogin = await adminClient.PostAsJsonAsync("/v1/admin/auth/login", new { email = adminEmail, password = bootstrap.Password });
+        var adminToken = (await adminLogin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        var financials = await adminClient.GetAsync("/v1/admin/financials?days=30");
+        Assert.Equal(HttpStatusCode.OK, financials.StatusCode);
+        var totals = (await financials.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("totals");
+        Assert.True(totals.GetProperty("creditSalesKobo").GetInt64() >= 5000);
+        Assert.True(totals.GetProperty("netKobo").GetInt64() >= 4000);
+    }
+
     private static HttpRequestMessage SignedWebhook(string body)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments/flutterwave/webhook")
