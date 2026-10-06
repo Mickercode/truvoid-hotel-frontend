@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from './api'
+import { ConfirmButton } from './ConfirmButton'
 
 type Outlet = { id: string; name: string; status: string; walletId: string; createdAt: string; balanceKobo: number }
 type Call = { id: string; verificationType: string; status: string; verdict?: string | null; fullName?: string | null; createdAt: string; environment?: string | null }
@@ -84,9 +85,14 @@ export function OutletDetailPage() {
             {busy ? 'Working…' : 'Reactivate outlet'}
           </button>
         ) : (
-          <button className="button button-primary" disabled={busy} onClick={() => void changeStatus('suspend')}>
-            {busy ? 'Working…' : 'Suspend outlet'}
-          </button>
+          <ConfirmButton
+            label="Suspend outlet"
+            question="Suspend this outlet? Its verifications stop."
+            confirmLabel="Suspend outlet"
+            className="button button-primary"
+            disabled={busy}
+            onConfirm={() => void changeStatus('suspend')}
+          />
         )}
       </div>
       {actionError && <div className="notice error" role="alert">{actionError}</div>}

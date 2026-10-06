@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, AuthProfile } from './api'
 import { CopyButton } from './CopyButton'
+import { ConfirmButton } from './ConfirmButton'
 
 type KeyRecord = {
   id: string
@@ -97,7 +98,7 @@ export function ApiKeysPage({ profile }: { profile: AuthProfile }) {
       <td>{key.environment === 'live' ? <span className="badge active">LIVE</span> : <span className="env-badge small">TEST</span>}</td>
       <td>{key.scope ?? 'organization'}</td><td>{key.description ?? '-'}</td><td>{key.status === 0 ? 'Active' : 'Revoked'}</td>
       <td>{new Date(key.createdAt).toLocaleDateString()}</td>
-      <td>{key.status === 0 && <button disabled={busy} className="link-button" onClick={() => void revoke(key.id)}>Revoke</button>}</td></tr>)}</tbody></table></div>
+      <td>{key.status === 0 && <ConfirmButton label="Revoke" question="Revoke this key? It stops working immediately." confirmLabel="Revoke" disabled={busy} onConfirm={() => void revoke(key.id)} />}</td></tr>)}</tbody></table></div>
       : <div className="empty">No API keys yet. Start with a test key — it's free.</div>}
     <div className="activity-card"><div><div className="eyebrow">INTEGRATION GUIDE</div><h2>Make your first call.</h2><p>Send <code>X-API-Key</code> to <code>POST /v1/verify/nin</code> with <code>{'{"number": "00000000001"}'}</code> using a test key.</p></div><a className="button button-primary" href="/api-docs.html" target="_blank" rel="noreferrer">Read API docs ↗</a></div>
   </section>

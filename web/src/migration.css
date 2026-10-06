@@ -26,6 +26,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .section-heading { display: flex; justify-content: space-between; align-items: end; margin: 48px 0 18px; }
 .section-heading h2 { margin: 8px 0 0; font-size: 22px; }
 .text-link, .link-button { color: var(--cyan); background: none; border: 0; cursor: pointer; font-size: 12px; }
+.confirm-inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.confirm-question { color: #ff9d9d; font: 11px 'DM Mono', monospace; }
+.link-button.button-danger { color: #ff9d9d; border: 1px solid #76484d; padding: 3px 8px; }
+.link-button.button-danger:hover { background: #291618; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); }
 .table-wrap table { width: 100%; border-collapse: collapse; min-width: 620px; }
 .table-wrap th { color: var(--muted); background: #0d1118; font: 10px 'DM Mono', monospace; letter-spacing: .08em; text-align: left; }

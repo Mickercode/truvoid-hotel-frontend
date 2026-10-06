@@ -25,6 +25,7 @@ import { OutletDetailPage } from "./OutletDetailPage";
 import { SettingsPage } from "./SettingsPage";
 import { AdminReview } from "./AdminReview";
 import { CopyButton } from "./CopyButton";
+import { ConfirmButton } from "./ConfirmButton";
 import { useEnvironment } from "./useEnvironment";
 import { useMode } from "./mode";
 
@@ -142,12 +143,14 @@ function Shell({
   const location = useLocation();
   const isAdmin = profile.tenantRole === "platform_admin" || profile.role.toLowerCase().includes("platform");
   const isOutlet = Boolean(profile.outletId);
+  const tenantRole = profile.tenantRole ?? profile.role;
+  const isOrgAdmin = tenantRole === "institution_admin" || tenantRole === "agency_admin";
   const environment = useEnvironment();
   const liveEnabled = Boolean(profile.liveEnabled);
   const [mode, changeMode] = useMode();
-  // Platform staff run TruvoID; they don't have a workspace of their own. Outlet users
-  // get only the outlet-scoped surfaces — setup, team, outlets, and org API keys are
-  // organization-administrator tools the API would reject anyway.
+  // Only surface tools the signed-in role can actually use. Organization administrators
+  // manage setup, team, outlets, and keys; staff and outlet users get the scoped surfaces
+  // the API will accept — otherwise those pages just 403.
   const items = isAdmin
     ? [
         ["/admin/agencies", "Organizations"],
@@ -162,17 +165,25 @@ function Shell({
           ["/wallet", "Wallet"],
           ["/settings", "Settings"],
         ]
-      : [
-          ["/dashboard", "Overview"],
-          ["/setup", "Organization setup"],
-          ["/verify", "Verify identity"],
-          ["/history", "History"],
-          ["/team", "Team"],
-          ["/outlets", "Outlets"],
-          ["/api-keys", "API keys"],
-          ["/wallet", "Wallet"],
-          ["/settings", "Settings"],
-        ];
+      : isOrgAdmin
+        ? [
+            ["/dashboard", "Overview"],
+            ["/setup", "Organization setup"],
+            ["/verify", "Verify identity"],
+            ["/history", "History"],
+            ["/team", "Team"],
+            ["/outlets", "Outlets"],
+            ["/api-keys", "API keys"],
+            ["/wallet", "Wallet"],
+            ["/settings", "Settings"],
+          ]
+        : [
+            ["/dashboard", "Overview"],
+            ["/verify", "Verify identity"],
+            ["/history", "History"],
+            ["/wallet", "Wallet"],
+            ["/settings", "Settings"],
+          ];
   const goLiveHint =
     profile.setupStatus === "submitted"
       ? "Your profile is under review — live unlocks once TruvoID approves it."
@@ -245,8 +256,8 @@ function Shell({
         ) : !isAdmin && mode === "live" && !liveEnabled ? (
           <div className="sandbox-banner" role="note">
             <strong>LIVE MODE LOCKED</strong> Your profile isn't approved yet, so live verifications will be refused.{" "}
-            <button type="button" className="link-button" onClick={() => changeMode("test")}>switch back to Test</button>{" "}
-            or <Link to="/setup">complete your profile</Link>.
+            <button type="button" className="link-button" onClick={() => changeMode("test")}>switch back to Test</button>
+            {isOrgAdmin && <> or <Link to="/setup">complete your profile</Link></>}.
           </div>
         ) : !isAdmin && mode === "live" ? (
           <div className="sandbox-banner live" role="note">
@@ -264,7 +275,7 @@ function Shell({
           <div className="sandbox-banner" role="note">
             <strong>TEST MODE</strong> Verifications are free and use test numbers — nothing real is looked up.{" "}
             {goLiveHint}{" "}
-            {profile.setupStatus !== "submitted" && <Link to="/setup">Continue setup →</Link>}
+            {isOrgAdmin && profile.setupStatus !== "submitted" && <Link to="/setup">Continue setup →</Link>}
           </div>
         ) : null}
         <div className="page-content">
@@ -285,7 +296,7 @@ function Shell({
                 <Route path="/settings" element={<SettingsPage profile={profile} onLogout={onLogout} />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </>
-            ) : (
+            ) : isOrgAdmin ? (
               <>
                 <Route path="/dashboard" element={<Dashboard profile={profile} />} />
                 <Route path="/setup" element={<OrganizationSetupPage />} />
@@ -295,6 +306,15 @@ function Shell({
                 <Route path="/outlets" element={<Outlets />} />
                 <Route path="/outlets/:outletId" element={<OutletDetailPage />} />
                 <Route path="/api-keys" element={<ApiKeysPage profile={profile} />} />
+                <Route path="/wallet" element={<Wallet />} />
+                <Route path="/settings" element={<SettingsPage profile={profile} onLogout={onLogout} />} />
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </>
+            ) : (
+              <>
+                <Route path="/dashboard" element={<Dashboard profile={profile} />} />
+                <Route path="/verify" element={<VerifyPage mode={mode} onModeChange={changeMode} />} />
+                <Route path="/history" element={<VerificationHistoryPage />} />
                 <Route path="/wallet" element={<Wallet />} />
                 <Route path="/settings" element={<SettingsPage profile={profile} onLogout={onLogout} />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
@@ -1049,22 +1069,18 @@ function InviteAgency() {
                       <button
                         className="link-button"
                         disabled={statusBusy === String(item.id)}
-                        onClick={() =>
-                          void changeStatus(String(item.id), "reactivate")
-                        }
+                        onClick={() => void changeStatus(String(item.id), "reactivate")}
                       >
                         {statusBusy === String(item.id) ? "Working…" : "Reactivate"}
                       </button>
                     ) : (
-                      <button
-                        className="link-button"
+                      <ConfirmButton
+                        label="Suspend"
+                        question="Suspend this organization?"
+                        confirmLabel="Suspend"
                         disabled={statusBusy === String(item.id)}
-                        onClick={() =>
-                          void changeStatus(String(item.id), "suspend")
-                        }
-                      >
-                        {statusBusy === String(item.id) ? "Working…" : "Suspend"}
-                      </button>
+                        onConfirm={() => void changeStatus(String(item.id), "suspend")}
+                      />
                     )}
                   </td>
                 </tr>
@@ -1136,10 +1152,13 @@ function InviteAgency() {
                             onClick={() => void invitationAction(String(item.id), "resend")}>
                             {invBusy === String(item.id) ? "Working…" : "Resend"}
                           </button>{" "}
-                          <button className="link-button" disabled={invBusy === String(item.id)}
-                            onClick={() => void invitationAction(String(item.id), "cancel")}>
-                            Cancel
-                          </button>
+                          <ConfirmButton
+                            label="Cancel"
+                            question="Cancel this invitation?"
+                            confirmLabel="Cancel invite"
+                            disabled={invBusy === String(item.id)}
+                            onConfirm={() => void invitationAction(String(item.id), "cancel")}
+                          />
                         </>
                       )}
                     </td>

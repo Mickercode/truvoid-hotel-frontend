@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { api } from './api'
 import { CopyButton } from './CopyButton'
+import { ConfirmButton } from './ConfirmButton'
 
 type AdminKey = {
   id: string
@@ -164,9 +165,13 @@ export function ApiKeysAdminPage() {
                 <td>{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString() : <span className="muted">never</span>}</td>
                 <td>
                   {key.status === 'active' && (
-                    <button className="link-button" disabled={busy === key.id} onClick={() => void revoke(key.id)}>
-                      {busy === key.id ? 'Revoking…' : 'Revoke'}
-                    </button>
+                    <ConfirmButton
+                      label="Revoke"
+                      question="Revoke this key?"
+                      confirmLabel="Revoke"
+                      disabled={busy === key.id}
+                      onConfirm={() => void revoke(key.id)}
+                    />
                   )}
                 </td>
               </tr>

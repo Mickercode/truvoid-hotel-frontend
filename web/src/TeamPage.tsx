@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { api, AuthProfile } from './api'
 import { CopyButton } from './CopyButton'
+import { ConfirmButton } from './ConfirmButton'
 
 type Member = { id: string; email: string; fullName?: string; role: string; status: string; outletId?: string; lastLoginAt?: string }
 type Outlet = { id: string; name: string }
@@ -77,6 +78,8 @@ export function TeamPage({ profile }: { profile: AuthProfile }) {
       <Notice message={message} error={message.startsWith('Could')} />
       {invite && <div className="key-reveal"><span>Invitation link</span><code>{invite}</code><CopyButton value={invite} label="Copy invitation link" /></div>}
     </div>
-    {members.length ? <div className="table-wrap"><table><thead><tr><th>Member</th><th>Role</th><th>Outlet</th><th>Status</th><th>Last login</th><th /></tr></thead><tbody>{members.map(member => <tr key={member.id}><td><strong>{member.fullName || member.email}</strong><br /><span className="stat-note">{member.email}</span></td><td>{member.role}</td><td>{member.outletId ? String(member.outletId).slice(0, 8) : 'Agency'}</td><td><span className={`badge ${member.status}`}>{member.status}</span></td><td>{member.lastLoginAt ? new Date(member.lastLoginAt).toLocaleDateString() : 'Never'}</td><td><button disabled={busy} className="link-button" onClick={() => void change(member.id, member.status === 'active' ? 'disable' : 'reactivate')}>{member.status === 'active' ? 'Disable' : 'Reactivate'}</button></td></tr>)}</tbody></table></div> : <div className="empty">No team members yet.</div>}
+    {members.length ? <div className="table-wrap"><table><thead><tr><th>Member</th><th>Role</th><th>Outlet</th><th>Status</th><th>Last login</th><th /></tr></thead><tbody>{members.map(member => <tr key={member.id}><td><strong>{member.fullName || member.email}</strong><br /><span className="stat-note">{member.email}</span></td><td>{member.role}</td><td>{member.outletId ? String(member.outletId).slice(0, 8) : 'Agency'}</td><td><span className={`badge ${member.status}`}>{member.status}</span></td><td>{member.lastLoginAt ? new Date(member.lastLoginAt).toLocaleDateString() : 'Never'}</td><td>{member.status === 'active'
+      ? <ConfirmButton label="Disable" question={`Disable ${member.fullName || member.email}?`} confirmLabel="Disable" disabled={busy} onConfirm={() => void change(member.id, 'disable')} />
+      : <button disabled={busy} className="link-button" onClick={() => void change(member.id, 'reactivate')}>Reactivate</button>}</td></tr>)}</tbody></table></div> : <div className="empty">No team members yet.</div>}
   </section>
 }
