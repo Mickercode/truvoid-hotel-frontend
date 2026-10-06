@@ -511,6 +511,22 @@ public class HttpEndpointTests(ApiFactory factory) : IClassFixture<ApiFactory>
         Assert.NotEqual(HttpStatusCode.OK, after.StatusCode);
     }
 
+    [Fact]
+    public async Task Platform_admin_can_read_the_audit_log()
+    {
+        var adminEmail = $"platform-{Guid.NewGuid():N}@gettruvoid.com";
+        var bootstrap = await new PlatformAdminBootstrapper(factory.MigratorConnectionString).CreateAsync(adminEmail, "Platform Admin");
+        var adminClient = factory.CreateClient();
+        var adminLogin = await adminClient.PostAsJsonAsync("/v1/admin/auth/login", new { email = adminEmail, password = bootstrap.Password });
+        var adminToken = (await adminLogin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString();
+        adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        var audit = await adminClient.GetAsync("/v1/admin/audit?page=1&pageSize=10");
+        Assert.Equal(HttpStatusCode.OK, audit.StatusCode);
+        var items = (await audit.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items");
+        Assert.True(items.GetArrayLength() >= 1);
+    }
+
     private static HttpRequestMessage SignedWebhook(string body)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments/flutterwave/webhook")

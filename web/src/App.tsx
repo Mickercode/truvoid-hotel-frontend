@@ -21,6 +21,7 @@ import { TeamPage } from "./TeamPage";
 import { AcceptInvite, AdminLogin, ForgotPassword, Login, Register, ResetPassword } from "./AuthScreens";
 import { PricingPage } from "./PricingPage";
 import { ApiKeysAdminPage } from "./ApiKeysAdminPage";
+import { AdminAuditPage } from "./AdminAuditPage";
 import { OutletDetailPage } from "./OutletDetailPage";
 import { SettingsPage } from "./SettingsPage";
 import { AdminReview } from "./AdminReview";
@@ -156,6 +157,7 @@ function Shell({
         ["/admin/agencies", "Organizations"],
         ["/admin/pricing", "Pricing"],
         ["/admin/api-keys", "API keys"],
+        ["/admin/audit", "Activity log"],
       ]
     : isOutlet
       ? [
@@ -285,6 +287,7 @@ function Shell({
                 <Route path="/admin/agencies" element={<InviteAgency />} />
                 <Route path="/admin/pricing" element={<PricingPage />} />
                 <Route path="/admin/api-keys" element={<ApiKeysAdminPage />} />
+                <Route path="/admin/audit" element={<AdminAuditPage />} />
                 <Route path="*" element={<Navigate to="/admin/agencies" replace />} />
               </>
             ) : isOutlet ? (

@@ -13,6 +13,7 @@ public static class EndpointRegistration
         app.MapOrganizationBrandingEndpoints();
         app.MapOrganizationInvitationEndpoints();
         app.MapAdminDashboardEndpoints();
+        app.MapAdminAuditEndpoints();
         app.MapApiKeyEndpoints();
         app.MapTenantEndpoints();
         app.MapTenantWalletEndpoints();
