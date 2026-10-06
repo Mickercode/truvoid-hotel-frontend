@@ -306,18 +306,6 @@ echo match ($result['status'] ?? null) {
   <footer>Questions or higher limits? <a href="mailto:support@gettruvoid.com">support@gettruvoid.com</a> · <a href="/">gettruvoid.com</a></footer>
 </main>
 </div>
-<script>
-  document.querySelectorAll('[data-tabs]').forEach((tabs) => {
-    tabs.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => {
-      tabs.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b === button))
-      tabs.querySelectorAll('[data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== button.dataset.tab })
-    }))
-  })
-  document.querySelectorAll('pre .copy').forEach((button) => button.addEventListener('click', async () => {
-    const text = [...button.parentElement.childNodes].filter((n) => n !== button).map((n) => n.textContent).join('').trim()
-    await navigator.clipboard.writeText(text)
-    button.textContent = 'Copied'; setTimeout(() => { button.textContent = 'Copy' }, 1500)
-  }))
-</script>
+<script src="/api-docs.js"></script>
 </body>
 </html>

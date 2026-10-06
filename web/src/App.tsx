@@ -454,11 +454,14 @@ function Outlets() {
   const [items, setItems] = useState<Json[]>([]);
   const [name, setName] = useState("");
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
   async function load() {
+    setLoadError(null);
     try {
       setItems(await api.get<Json[]>("/v1/tenant/outlets"));
-    } catch {
+    } catch (error) {
       setItems([]);
+      setLoadError(error instanceof Error ? error.message : "Outlets could not be loaded.");
     }
   }
   useEffect(() => {
@@ -497,7 +500,12 @@ function Outlets() {
         </form>
         <Notice message={message} error={message.startsWith("Could")} />
       </div>
-      {items.length ? (
+      {loadError ? (
+        <div className="notice error" role="alert">
+          {loadError}{" "}
+          <button className="retry-button" onClick={() => void load()}>Retry</button>
+        </div>
+      ) : items.length ? (
         <div className="table-wrap">
           <table>
             <thead>
@@ -528,11 +536,23 @@ function Outlets() {
     </section>
   );
 }
-const BANK_ACCOUNTS = [
-  { bank: "Zenith Bank", name: "Slogani Consults Nigeria Limited", number: "1017167544" },
-  { bank: "Providus Bank", name: "Slogani Consults Nigeria Limited", number: "1310418112" },
-];
+// Bank details are config so they can change without a redeploy; the defaults are the
+// current receiving accounts. Set VITE_BANK_ACCOUNTS to a JSON array to override.
+const BANK_ACCOUNTS: { bank: string; name: string; number: string }[] = (() => {
+  const raw = import.meta.env.VITE_BANK_ACCOUNTS as string | undefined;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    } catch { /* fall through to defaults */ }
+  }
+  return [
+    { bank: "Zenith Bank", name: "Slogani Consults Nigeria Limited", number: "1017167544" },
+    { bank: "Providus Bank", name: "Slogani Consults Nigeria Limited", number: "1310418112" },
+  ];
+})();
 const SUPPORT_WHATSAPP = (import.meta.env.VITE_SUPPORT_WHATSAPP as string | undefined)?.trim();
+const SUPPORT_EMAIL = (import.meta.env.VITE_SUPPORT_EMAIL as string | undefined)?.trim() || "hello@gettruvoid.com";
 function Wallet() {
   const [balance, setBalance] = useState<Json>({});
   const [ledger, setLedger] = useState<Json[]>([]);
@@ -721,7 +741,7 @@ function Wallet() {
                 so we can credit your wallet.
               </>
             ) : (
-              "Send your payment receipt to TruvoID support so we can credit your wallet."
+              <>Send your payment receipt to <a className="text-link" href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> so we can credit your wallet.</>
             )}
           </p>
         </>
@@ -1186,12 +1206,13 @@ export function App() {
       .catch(() => tokenStore.clear())
       .finally(() => setLoading(false));
   }, []);
+  const navigate = useNavigate();
   useEffect(() => {
-    // Fired by api.ts when a refresh fails: drop back to the sign-in screen.
-    const expire = () => setProfile(null);
+    // Fired by api.ts when a refresh fails: drop back to sign-in with a reason.
+    const expire = () => { setProfile(null); navigate("/login?expired=1", { replace: true }); };
     window.addEventListener(SESSION_EXPIRED_EVENT, expire);
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expire);
-  }, []);
+  }, [navigate]);
   useEffect(() => {
     // Setup status changes what the shell shows (test-mode banner, Live switch), and
     // approval happens on the platform side, so pick it up on focus/visibility and

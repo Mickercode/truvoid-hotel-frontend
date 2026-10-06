@@ -56,9 +56,14 @@ export function AdminReview({ organization, onClose, onDecided }: {
   }
 
   async function openDocument(id: string) {
+    // Open the tab synchronously (before the await) or pop-up blockers drop it.
+    const tab = window.open('', '_blank')
     try {
-      window.open(await api.download(`/v1/admin/organizations/${organization.id}/documents/${id}`), '_blank', 'noopener')
+      const url = await api.download(`/v1/admin/organizations/${organization.id}/documents/${id}`)
+      if (tab) tab.location.href = url
+      else setMessage({ text: 'Allow pop-ups to view documents, or your browser blocked the tab.', error: true })
     } catch (e) {
+      tab?.close()
       setMessage({ text: e instanceof Error ? e.message : 'Document could not be opened.', error: true })
     }
   }

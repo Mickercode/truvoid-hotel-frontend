@@ -1,4 +1,4 @@
-import { getMode } from './mode'
+import { getMode, clearMode } from './mode'
 
 export type AuthProfile = {
   userId: string
@@ -104,6 +104,7 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
     if (tokenStore.accessToken && tokenStore.accessToken !== usedToken) return request<T>(path, init, false)
     if (await refreshSession()) return request<T>(path, init, false)
     tokenStore.clear()
+    clearMode()
     window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
   }
 
@@ -149,6 +150,7 @@ export const api = {
   logout: async () => {
     const refreshToken = tokenStore.refreshToken
     tokenStore.clear()
+    clearMode()
     if (refreshToken)
       await fetch(`${API_BASE_URL}/v1/auth/logout`, {
         method: 'POST',

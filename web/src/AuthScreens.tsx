@@ -29,6 +29,8 @@ export function AdminLogin(props: SignInProps) {
 function SignIn({ onLogin, Frame, variant }: SignInProps & { variant: 'workspace' | 'admin' }) {
   const admin = variant === 'admin'
   const navigate = useNavigate()
+  const [params] = useSearchParams()
+  const expired = params.get('expired') === '1'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<{ email?: string | null; password?: string | null }>({})
@@ -73,6 +75,7 @@ function SignIn({ onLogin, Frame, variant }: SignInProps & { variant: 'workspace
         <ProgressSteps title="SIGNING YOU IN" steps={flow.steps} />
       ) : (
         <>
+          {expired && !message && <div className="notice error" role="alert">Your session expired. Please sign in again.</div>}
           <form onSubmit={submit} noValidate>
             <FormField label="Email address" type="email" autoComplete="email" autoFocus={!message}
               value={email} error={errors.email}

@@ -87,7 +87,13 @@ export function PricingPage() {
 
   async function saveOrgPrice(event: FormEvent, rate: OrgRate) {
     event.preventDefault()
-    const price = toKobo(orgDrafts[rate.type] ?? '')
+    // An empty field must not save ₦0 (toKobo('') is 0). Require an explicit amount.
+    const raw = (orgDrafts[rate.type] ?? '').trim()
+    if (!raw) {
+      setOrgNotice({ type: rate.type, text: 'Enter a price, or leave it unchanged.', error: true })
+      return
+    }
+    const price = toKobo(raw)
     if (Number.isNaN(price) || price < 0) {
       setOrgNotice({ type: rate.type, text: 'Enter a price of ₦0 or more.', error: true })
       return

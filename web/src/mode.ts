@@ -29,6 +29,16 @@ export function setMode(mode: Mode) {
   window.dispatchEvent(new Event(EVENT))
 }
 
+/** Forgets the mode so it can't leak into the next user's session on a shared browser. */
+export function clearMode() {
+  try {
+    localStorage.removeItem(KEY)
+  } catch {
+    /* ignore */
+  }
+  window.dispatchEvent(new Event(EVENT))
+}
+
 /** Current mode. The Test/Live switch is always toggleable; the server still refuses
  *  live calls for a workspace that isn't approved, so this stays a preference, not a
  *  permission, and the shell warns when Live is picked too early. */
